@@ -1,0 +1,25 @@
+apiVersion: runpod.crossplane.io/v1alpha1
+kind: Pod
+metadata:
+  name: provider-runpod-local-smoke
+  namespace: default
+  labels:
+    app.kubernetes.io/name: provider-runpod-local-smoke
+spec:
+  providerConfigRef:
+    name: default
+  forProvider:
+    imageName: python:3.11-slim
+    gpuTypeIds:
+      - YOUR_GPU_TYPE_ID
+    gpuCount: 1
+    cloudType: SECURE
+    supportPublicIp: false
+    dockerStartCmd:
+      - python
+      - -m
+      - http.server
+      - "8888"
+    ports:
+      - number: 8888
+        protocol: http

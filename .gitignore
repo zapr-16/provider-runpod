@@ -1,0 +1,10 @@
+vendor/
+*.test
+*.out
+_output/
+*.tfstate
+*.tfstate.backup
+.idea/
+.vscode/
+.env
+provider

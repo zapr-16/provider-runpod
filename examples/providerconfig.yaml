@@ -1,0 +1,10 @@
+apiVersion: runpod.crossplane.io/v1beta1
+kind: ProviderConfig
+metadata:
+  name: default
+spec:
+  credentials:
+    secretRef:
+      namespace: crossplane-system
+      name: runpod-api-key
+      key: apiKey

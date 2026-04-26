@@ -1,0 +1,60 @@
+version: 2
+
+builds:
+  - id: provider
+    binary: provider
+    main: ./cmd/provider
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -buildid={{ .Version }}-{{ .Commit }}-{{ .Date }}
+
+dockers:
+  - id: provider-amd64
+    ids:
+      - provider
+    goos: linux
+    goarch: amd64
+    use: buildx
+    dockerfile: Dockerfile
+    image_templates:
+      - ghcr.io/zapr-16/provider-runpod:{{ .Tag }}-amd64
+      - ghcr.io/zapr-16/provider-runpod:latest-amd64
+    build_flag_templates:
+      - --platform=linux/amd64
+  - id: provider-arm64
+    ids:
+      - provider
+    goos: linux
+    goarch: arm64
+    use: buildx
+    dockerfile: Dockerfile
+    image_templates:
+      - ghcr.io/zapr-16/provider-runpod:{{ .Tag }}-arm64
+      - ghcr.io/zapr-16/provider-runpod:latest-arm64
+    build_flag_templates:
+      - --platform=linux/arm64
+
+docker_manifests:
+  - name_template: ghcr.io/zapr-16/provider-runpod:{{ .Tag }}
+    image_templates:
+      - ghcr.io/zapr-16/provider-runpod:{{ .Tag }}-amd64
+      - ghcr.io/zapr-16/provider-runpod:{{ .Tag }}-arm64
+  - name_template: ghcr.io/zapr-16/provider-runpod:latest
+    image_templates:
+      - ghcr.io/zapr-16/provider-runpod:latest-amd64
+      - ghcr.io/zapr-16/provider-runpod:latest-arm64
+
+git:
+  tag_sort: -version:refname
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
