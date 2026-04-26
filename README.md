@@ -8,9 +8,15 @@ Crossplane must be installed in the cluster before installing this provider: htt
 
 ## Install
 
+The provider ships as two OCI artifacts: a controller image and a
+Crossplane package (`.xpkg`) that references it. Install the package:
+
 ```bash
-crossplane xpkg install provider ghcr.io/zapr-16/provider-runpod:latest
+crossplane xpkg install provider ghcr.io/zapr-16/provider-runpod:v0.1.0-pkg
 ```
+
+(The `-pkg` suffix distinguishes the package from the raw controller
+image at the same tag without it.)
 
 ## Configure
 
