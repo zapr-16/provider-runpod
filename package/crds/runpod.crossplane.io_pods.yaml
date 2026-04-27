@@ -102,6 +102,15 @@ spec:
                   imageName:
                     description: Container image to run for the pod workload.
                     type: string
+                  recreateOnTerminate:
+                    description: |
+                      RecreateOnTerminate causes the controller to clear the
+                      external name and report the resource as missing whenever
+                      RunPod marks the pod EXITED or TERMINATED. The next
+                      reconcile then calls Create() and provisions a fresh pod
+                      with the same spec. Useful for Spot-backed workloads.
+                      Defaults to false.
+                    type: boolean
                   ports:
                     description: Container ports to expose, later serialized to RunPod
                       "<port>/<protocol>" strings.

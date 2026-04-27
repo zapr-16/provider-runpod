@@ -169,6 +169,26 @@ func TestObserve(t *testing.T) {
 				},
 			},
 		},
+		"TerminatedWithRecreateOnTerminateClearsExternalName": {
+			externalName: "pod-123",
+			spec: v1alpha1.PodParameters{
+				RecreateOnTerminate: ptrBool(true),
+			},
+			status:     v1alpha1.PodObservation{PodID: "existing"},
+			statusCode: http.StatusOK,
+			response: &runpodclient.PodResponse{
+				ID:            "pod-123",
+				DesiredStatus: "TERMINATED",
+			},
+			wantCalls: 1,
+			want: want{
+				exists:          false,
+				upToDate:        false,
+				readyStatus:     corev1.ConditionFalse,
+				readyReason:     xpv1.ReasonUnavailable,
+				networkingReady: false,
+			},
+		},
 		"UnknownStatusIsUnavailable": {
 			externalName: "pod-123",
 			status:       v1alpha1.PodObservation{PodID: "existing"},
@@ -698,6 +718,8 @@ func newTestClient(t *testing.T, server *httptest.Server) *runpodclient.Client {
 	setUnexportedField(t, c, "httpClient", server.Client())
 	return c
 }
+
+func ptrBool(b bool) *bool { return &b }
 
 func setUnexportedField(t *testing.T, target any, name string, value any) {
 	t.Helper()

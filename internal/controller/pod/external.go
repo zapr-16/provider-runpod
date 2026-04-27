@@ -91,6 +91,19 @@ func (e *external) Observe(ctx context.Context, mg xpresource.Managed) (managed.
 		}
 	case "EXITED", "TERMINATED":
 		pod.SetConditions(xpv1.Unavailable())
+		// Spot reclaim / OOM / manual console delete all leave the pod
+		// stuck here forever unless we explicitly tell Crossplane the
+		// resource is gone — which causes the next reconcile to call
+		// Create() and provision a fresh pod with the same spec.
+		// Opt-in via spec.forProvider.recreateOnTerminate.
+		if pod.Spec.ForProvider.RecreateOnTerminate != nil && *pod.Spec.ForProvider.RecreateOnTerminate {
+			e.log.Info("Pod terminated; clearing external-name to trigger auto-recreate",
+				"external-name", externalName, "status", response.DesiredStatus)
+			if anns := pod.GetAnnotations(); anns != nil {
+				delete(anns, meta.AnnotationKeyExternalName)
+			}
+			return managed.ExternalObservation{ResourceExists: false}, nil
+		}
 	default:
 		e.log.Info("RunPod returned unknown desiredStatus", "status", response.DesiredStatus, "external-name", externalName)
 		pod.SetConditions(xpv1.Unavailable())

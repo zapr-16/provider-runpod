@@ -81,6 +81,17 @@ type PodParameters struct {
 	// +optional
 	// +immutable
 	DockerStartCmd []string `json:"dockerStartCmd,omitempty"`
+
+	// RecreateOnTerminate causes the controller to clear the external
+	// name and report the resource as missing whenever RunPod marks
+	// the pod EXITED or TERMINATED (e.g. Spot reclaim, OOM, manual
+	// console delete). Crossplane's next reconcile will then call
+	// Create() and provision a fresh pod with the same spec. Useful
+	// for Spot-backed workloads where occasional reclaim is expected
+	// and continuous availability is preferred over preserving the
+	// specific instance. Defaults to false (manual recreate).
+	// +optional
+	RecreateOnTerminate *bool `json:"recreateOnTerminate,omitempty"`
 }
 
 // PodObservation captures the observed state returned by RunPod.
