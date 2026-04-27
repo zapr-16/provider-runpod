@@ -1,7 +1,7 @@
 GOBIN ?= $(shell go env GOPATH)/bin
 
 CONTROLLER_GEN_VERSION ?= v0.20.1
-GOLANGCI_LINT_VERSION ?= v2.3.0
+GOLANGCI_LINT_VERSION ?= v2.11.4
 
 CONTROLLER_GEN := $(GOBIN)/controller-gen
 GOLANGCI_LINT := $(GOBIN)/golangci-lint

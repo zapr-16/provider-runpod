@@ -26,7 +26,9 @@ jobs:
         # v7+ is required for golangci-lint v2.x.
         uses: golangci/golangci-lint-action@v7
         with:
-          version: v2.3.0
+          # v2.3.0 was built with Go 1.24 — fails to load configs that
+          # target Go 1.26+ (this project's go.mod is on 1.26.2).
+          version: v2.11.4
 
   test:
     runs-on: ubuntu-latest
