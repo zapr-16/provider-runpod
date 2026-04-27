@@ -7,4 +7,7 @@ _output/
 .idea/
 .vscode/
 .env
-provider
+# Built binary at the repo root, NOT cmd/provider/ (the source dir).
+# Without the leading slash this pattern matched cmd/provider/ too.
+/provider
+*.xpkg
