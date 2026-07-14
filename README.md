@@ -70,6 +70,40 @@ spec:
         protocol: http
 ```
 
+## Create a serverless Endpoint
+
+Serverless endpoints run autoscaled workers with scale-to-zero, billed
+per active second. The controller implicitly creates and owns the
+backing RunPod template. See `examples/endpoint-vllm.yaml` for a full
+example and `docs/serverless-endpoints.md` for the design.
+
+```yaml
+apiVersion: runpod.crossplane.io/v1alpha1
+kind: Endpoint
+metadata:
+  name: vllm-small
+  namespace: default
+spec:
+  providerConfigRef:
+    name: default
+  forProvider:
+    imageName: runpod/worker-v1-vllm:stable
+    env:
+      - name: MODEL_NAME
+        value: "Qwen/Qwen2.5-Coder-7B-Instruct"
+    containerDiskInGb: 30
+    gpuTypeIds:
+      - NVIDIA GeForce RTX 3090
+    workersMin: 0
+    workersMax: 2
+    idleTimeout: 60
+    flashBoot: true
+```
+
+Note: unlike pod proxy URLs, the serverless data plane
+(`status.atProvider.runtimeEndpoint`) requires an
+`Authorization: Bearer <RunPod API key>` header on every request.
+
 ## Development
 
 ```bash

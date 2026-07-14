@@ -42,6 +42,9 @@ rules:
       - pods
       - pods/status
       - pods/finalizers
+      - endpoints
+      - endpoints/status
+      - endpoints/finalizers
     verbs:
       - get
       - list

@@ -1,0 +1,35 @@
+# Serverless vLLM endpoint: scale-to-zero, pay per active second.
+# The controller implicitly creates and owns the backing RunPod template.
+#
+# Data-plane calls (status.atProvider.runtimeEndpoint / openAIBaseURL)
+# require an "Authorization: Bearer <RunPod API key>" header — unlike pod
+# proxy URLs, which are unauthenticated.
+apiVersion: runpod.crossplane.io/v1alpha1
+kind: Endpoint
+metadata:
+  name: vllm-small
+  namespace: default
+spec:
+  providerConfigRef:
+    name: default
+  forProvider:
+    imageName: runpod/worker-v1-vllm:stable
+    env:
+      - name: MODEL_NAME
+        value: "Qwen/Qwen2.5-Coder-7B-Instruct"
+    containerDiskInGb: 30
+    # Ordered by rental priority; serverless uses GPU type IDs like pods.
+    gpuTypeIds:
+      - "NVIDIA GeForce RTX 3090"
+      - "NVIDIA GeForce RTX 4090"
+      - "NVIDIA L4"
+    workersMin: 0        # scale to zero
+    workersMax: 2
+    idleTimeout: 60      # seconds
+    flashBoot: true
+    scalerType: QUEUE_DELAY
+    scalerValue: 4
+    # networkVolumeId: ""  # optional, for model weight caching
+  writeConnectionSecretToRef:
+    name: vllm-small-conn
+    namespace: default

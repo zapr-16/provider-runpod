@@ -23,4 +23,5 @@ var (
 
 func init() {
 	SchemeBuilder.Register(&Pod{}, &PodList{})
+	SchemeBuilder.Register(&Endpoint{}, &EndpointList{})
 }

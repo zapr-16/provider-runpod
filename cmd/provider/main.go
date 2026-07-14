@@ -13,6 +13,7 @@ import (
 
 	v1alpha1 "github.com/zapr-16/provider-runpod/apis/v1alpha1"
 	v1beta1 "github.com/zapr-16/provider-runpod/apis/v1beta1"
+	endpointcontroller "github.com/zapr-16/provider-runpod/internal/controller/endpoint"
 	podcontroller "github.com/zapr-16/provider-runpod/internal/controller/pod"
 	providerconfigcontroller "github.com/zapr-16/provider-runpod/internal/controller/providerconfig"
 )
@@ -53,6 +54,11 @@ func main() {
 
 	if err := podcontroller.Setup(mgr, logger.WithName("pod")); err != nil {
 		logger.Error(err, "cannot set up Pod controller")
+		os.Exit(1)
+	}
+
+	if err := endpointcontroller.Setup(mgr, logger.WithName("endpoint")); err != nil {
+		logger.Error(err, "cannot set up Endpoint controller")
 		os.Exit(1)
 	}
 
