@@ -15,6 +15,7 @@ import (
 	managed "github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	v1alpha1 "github.com/zapr-16/provider-runpod/apis/v1alpha1"
 	runpodclient "github.com/zapr-16/provider-runpod/internal/clients"
@@ -48,6 +49,7 @@ func TestObserve(t *testing.T) {
 		Ports: []string{"8888/http", "22/tcp"},
 		Machine: struct {
 			GPUDisplayName string `json:"gpuDisplayName"`
+			GPUTypeID      string `json:"gpuTypeId"`
 		}{
 			GPUDisplayName: "NVIDIA A100",
 		},
@@ -95,11 +97,42 @@ func TestObserve(t *testing.T) {
 				readyReason:     xpv1.ReasonAvailable,
 				networkingReady: true,
 				podID:           "pod-123",
-				runtimeEndpoint: "http://1.2.3.4:31000",
+				runtimeEndpoint: "https://pod-123-8888.proxy.runpod.net",
 				connection: managed.ConnectionDetails{
 					"podId":    []byte("pod-123"),
-					"endpoint": []byte("http://1.2.3.4:31000"),
-					"port":     []byte("31000"),
+					"endpoint": []byte("https://pod-123-8888.proxy.runpod.net"),
+					"port":     []byte("8888"),
+				},
+			},
+		},
+		"RunningCommunityHTTPWithoutPublicIPIsAvailable": {
+			// Regression: COMMUNITY pods with http ports never receive a
+			// public IP — the proxy endpoint alone must mark them ready.
+			externalName: "pod-123",
+			spec: v1alpha1.PodParameters{
+				Ports: []v1alpha1.Port{{Number: 8000, Protocol: "http"}},
+			},
+			status:     v1alpha1.PodObservation{PodID: "existing"},
+			statusCode: http.StatusOK,
+			response: &runpodclient.PodResponse{
+				ID:            "pod-123",
+				DesiredStatus: "RUNNING",
+				Ports:         []string{"8000/http"},
+			},
+			wantCalls: 1,
+			want: want{
+				exists:          true,
+				upToDate:        true,
+				lateInit:        false,
+				readyStatus:     corev1.ConditionTrue,
+				readyReason:     xpv1.ReasonAvailable,
+				networkingReady: true,
+				podID:           "pod-123",
+				runtimeEndpoint: "https://pod-123-8000.proxy.runpod.net",
+				connection: managed.ConnectionDetails{
+					"podId":    []byte("pod-123"),
+					"endpoint": []byte("https://pod-123-8000.proxy.runpod.net"),
+					"port":     []byte("8000"),
 				},
 			},
 		},
@@ -210,7 +243,7 @@ func TestObserve(t *testing.T) {
 				},
 			},
 		},
-		"LateInitPopulatesAtProvider": {
+		"ObservePopulatesAtProvider": {
 			externalName: "pod-123",
 			spec: v1alpha1.PodParameters{
 				Ports: []v1alpha1.Port{
@@ -224,16 +257,16 @@ func TestObserve(t *testing.T) {
 			want: want{
 				exists:          true,
 				upToDate:        true,
-				lateInit:        true,
+				lateInit:        false,
 				readyStatus:     corev1.ConditionTrue,
 				readyReason:     xpv1.ReasonAvailable,
 				networkingReady: true,
 				podID:           "pod-123",
-				runtimeEndpoint: "http://1.2.3.4:31000",
+				runtimeEndpoint: "https://pod-123-8888.proxy.runpod.net",
 				connection: managed.ConnectionDetails{
 					"podId":    []byte("pod-123"),
-					"endpoint": []byte("http://1.2.3.4:31000"),
-					"port":     []byte("31000"),
+					"endpoint": []byte("https://pod-123-8888.proxy.runpod.net"),
+					"port":     []byte("8888"),
 				},
 			},
 		},
@@ -292,8 +325,11 @@ func TestObserve(t *testing.T) {
 				readyReason:     xpv1.ReasonAvailable,
 				networkingReady: true,
 				podID:           "pod-123",
+				runtimeEndpoint: "https://pod-123-9999.proxy.runpod.net",
 				connection: managed.ConnectionDetails{
-					"podId": []byte("pod-123"),
+					"podId":    []byte("pod-123"),
+					"endpoint": []byte("https://pod-123-9999.proxy.runpod.net"),
+					"port":     []byte("9999"),
 				},
 			},
 		},
@@ -427,6 +463,7 @@ func TestCreate(t *testing.T) {
 		mountPath := "/workspace"
 
 		p := &v1alpha1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "vllm-test"},
 			Spec: v1alpha1.PodSpec{
 				ForProvider: v1alpha1.PodParameters{
 					ImageName:         &image,
@@ -459,6 +496,9 @@ func TestCreate(t *testing.T) {
 		}
 		if diff := reflect.DeepEqual(got.ConnectionDetails, managed.ConnectionDetails{"podId": []byte("pod-created")}); !diff {
 			t.Fatalf("Create() connection details = %#v, want %#v", got.ConnectionDetails, managed.ConnectionDetails{"podId": []byte("pod-created")})
+		}
+		if gotBody.Name == nil || *gotBody.Name != "vllm-test" {
+			t.Fatalf("Create() name = %#v, want %q", gotBody.Name, "vllm-test")
 		}
 		if gotBody.ImageName == nil || *gotBody.ImageName != image {
 			t.Fatalf("Create() imageName = %#v, want %q", gotBody.ImageName, image)
@@ -639,33 +679,48 @@ func TestHasPortsDrift(t *testing.T) {
 func TestResolveConnectionTarget(t *testing.T) {
 	tests := map[string]struct {
 		ports    []v1alpha1.Port
+		podID    string
 		publicIP string
 		mappings map[string]int32
 		wantURL  string
 		wantPort string
 	}{
 		"NoDeclaredPorts": {
+			podID:    "pod-123",
 			publicIP: "1.2.3.4",
 			mappings: map[string]int32{"8888/http": 31000},
 		},
-		"HTTPPortResolvesEndpoint": {
+		"HTTPPortResolvesProxyEndpoint": {
 			ports:    []v1alpha1.Port{{Number: 22}, {Number: 8888, Protocol: "http"}},
+			podID:    "pod-123",
 			publicIP: "1.2.3.4",
 			mappings: map[string]int32{"22/tcp": 30022, "8888/http": 31000},
-			wantURL:  "http://1.2.3.4:31000",
-			wantPort: "31000",
+			wantURL:  "https://pod-123-8888.proxy.runpod.net",
+			wantPort: "8888",
+		},
+		"HTTPPortWithoutPublicIPStillResolvesProxy": {
+			// COMMUNITY pods with http-only ports never get a public IP;
+			// the proxy endpoint must resolve regardless.
+			ports:    []v1alpha1.Port{{Number: 8000, Protocol: "http"}},
+			podID:    "pod-123",
+			wantURL:  "https://pod-123-8000.proxy.runpod.net",
+			wantPort: "8000",
 		},
 		"NoHTTPPortUsesFallbackPortOnly": {
 			ports:    []v1alpha1.Port{{Number: 22}},
+			podID:    "pod-123",
 			publicIP: "1.2.3.4",
 			mappings: map[string]int32{"22/tcp": 30022},
 			wantPort: "30022",
+		},
+		"NoPodIDNoPublicIPResolvesNothing": {
+			ports: []v1alpha1.Port{{Number: 8000, Protocol: "http"}},
 		},
 	}
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			gotURL, gotPort := resolveConnectionTarget(tc.ports, tc.publicIP, tc.mappings)
+			gotURL, gotPort := resolveConnectionTarget(tc.ports, tc.podID, tc.publicIP, tc.mappings)
 			if gotURL != tc.wantURL || gotPort != tc.wantPort {
 				t.Fatalf("resolveConnectionTarget() = (%q, %q), want (%q, %q)", gotURL, gotPort, tc.wantURL, tc.wantPort)
 			}

@@ -35,6 +35,7 @@ type Client struct {
 
 // CreatePodRequest mirrors the RunPod pod create payload used by the provider.
 type CreatePodRequest struct {
+	Name              *string           `json:"name,omitempty"`
 	ImageName         *string           `json:"imageName,omitempty"`
 	GPUTypeIDs        []string          `json:"gpuTypeIds,omitempty"`
 	GPUCount          *int32            `json:"gpuCount,omitempty"`
@@ -63,6 +64,7 @@ type PodResponse struct {
 	} `json:"gpu"`
 	Machine struct {
 		GPUDisplayName string `json:"gpuDisplayName"`
+		GPUTypeID      string `json:"gpuTypeId"`
 	} `json:"machine"`
 }
 

@@ -52,11 +52,15 @@ func (e *external) Observe(ctx context.Context, mg xpresource.Managed) (managed.
 		return managed.ExternalObservation{ResourceExists: false}, nil
 	}
 
-	networkingReady := response.PublicIP != "" && response.PortMappings != nil
-	endpoint, resolvedPort := resolveConnectionTarget(pod.Spec.ForProvider.Ports, response.PublicIP, response.PortMappings)
+	endpoint, resolvedPort := resolveConnectionTarget(pod.Spec.ForProvider.Ports, response.ID, response.PublicIP, response.PortMappings)
+	networkingReady := endpoint != "" || (response.PublicIP != "" && response.PortMappings != nil)
 	gpuDisplayName := response.Machine.GPUDisplayName
 	if gpuDisplayName == "" {
 		gpuDisplayName = response.GPU.DisplayName
+	}
+	if gpuDisplayName == "" {
+		// The REST API reports the GPU under machine.gpuTypeId only.
+		gpuDisplayName = response.Machine.GPUTypeID
 	}
 
 	atProvider := v1alpha1.PodObservation{
@@ -79,7 +83,6 @@ func (e *external) Observe(ctx context.Context, mg xpresource.Managed) (managed.
 		atProvider.LastStartedAt = &startedAt
 	}
 
-	lateInitialized := pod.Status.AtProvider.PodID == ""
 	pod.Status.AtProvider = atProvider
 
 	switch response.DesiredStatus {
@@ -122,11 +125,14 @@ func (e *external) Observe(ctx context.Context, mg xpresource.Managed) (managed.
 		connectionDetails["port"] = []byte(resolvedPort)
 	}
 
+	// Never report ResourceLateInitialized: this provider does not
+	// late-initialize spec fields, and reporting it makes the reconciler
+	// issue a spec update that resets pending status changes — atProvider
+	// would never persist.
 	return managed.ExternalObservation{
-		ResourceExists:          true,
-		ResourceUpToDate:        !(envDrift || portsDrift),
-		ResourceLateInitialized: lateInitialized,
-		ConnectionDetails:       connectionDetails,
+		ResourceExists:    true,
+		ResourceUpToDate:  !envDrift && !portsDrift,
+		ConnectionDetails: connectionDetails,
 	}, nil
 }
 
@@ -136,7 +142,9 @@ func (e *external) Create(ctx context.Context, mg xpresource.Managed) (managed.E
 		return managed.ExternalCreation{}, errors.New(errNotPod)
 	}
 
+	name := pod.GetName()
 	req := runpodclient.CreatePodRequest{
+		Name:              &name,
 		ImageName:         pod.Spec.ForProvider.ImageName,
 		GPUTypeIDs:        cloneStrings(pod.Spec.ForProvider.GPUTypeIDs),
 		GPUCount:          pod.Spec.ForProvider.GPUCount,
@@ -225,7 +233,22 @@ func hasPortsDrift(desired []v1alpha1.Port, observed []string) bool {
 	return !stringSetEqual(want, got)
 }
 
-func resolveConnectionTarget(ports []v1alpha1.Port, publicIP string, mappings map[string]int32) (string, string) {
+// resolveConnectionTarget derives the primary connection endpoint for a pod.
+// HTTP ports are served through RunPod's TLS proxy at
+// https://{podID}-{containerPort}.proxy.runpod.net — COMMUNITY pods with
+// http-only ports never receive a public IP, so the proxy is the only
+// route to them. TCP ports fall back to publicIP:externalPort mappings.
+func resolveConnectionTarget(ports []v1alpha1.Port, podID, publicIP string, mappings map[string]int32) (string, string) {
+	if podID != "" {
+		for _, port := range ports {
+			if normalizeProtocol(port.Protocol) != "http" {
+				continue
+			}
+			portString := strconv.Itoa(int(port.Number))
+			return fmt.Sprintf("https://%s-%s.proxy.runpod.net", podID, portString), portString
+		}
+	}
+
 	if len(ports) == 0 || publicIP == "" || mappings == nil {
 		return "", ""
 	}
@@ -237,14 +260,8 @@ func resolveConnectionTarget(ports []v1alpha1.Port, publicIP string, mappings ma
 		if !ok {
 			continue
 		}
-
-		portString := strconv.Itoa(int(externalPort))
 		if fallback == "" {
-			fallback = portString
-		}
-
-		if strings.EqualFold(normalizeProtocol(port.Protocol), "http") {
-			return fmt.Sprintf("http://%s:%s", publicIP, portString), portString
+			fallback = strconv.Itoa(int(externalPort))
 		}
 	}
 

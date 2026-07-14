@@ -102,15 +102,6 @@ spec:
                   imageName:
                     description: Container image to run for the pod workload.
                     type: string
-                  recreateOnTerminate:
-                    description: |
-                      RecreateOnTerminate causes the controller to clear the
-                      external name and report the resource as missing whenever
-                      RunPod marks the pod EXITED or TERMINATED. The next
-                      reconcile then calls Create() and provisions a fresh pod
-                      with the same spec. Useful for Spot-backed workloads.
-                      Defaults to false.
-                    type: boolean
                   ports:
                     description: Container ports to expose, later serialized to RunPod
                       "<port>/<protocol>" strings.
@@ -126,6 +117,17 @@ spec:
                       - number
                       type: object
                     type: array
+                  recreateOnTerminate:
+                    description: |-
+                      RecreateOnTerminate causes the controller to clear the external
+                      name and report the resource as missing whenever RunPod marks
+                      the pod EXITED or TERMINATED (e.g. Spot reclaim, OOM, manual
+                      console delete). Crossplane's next reconcile will then call
+                      Create() and provision a fresh pod with the same spec. Useful
+                      for Spot-backed workloads where occasional reclaim is expected
+                      and continuous availability is preferred over preserving the
+                      specific instance. Defaults to false (manual recreate).
+                    type: boolean
                   supportPublicIp:
                     description: Request a public IP for COMMUNITY cloud pods so exposed
                       ports receive external mappings.
@@ -330,8 +332,9 @@ spec:
                     format: date-time
                     type: string
                   networkingReady:
-                    description: Derived readiness flag, true only when PublicIP is
-                      non-empty and PortMappings is non-nil.
+                    description: |-
+                      Derived readiness flag, true when a connection endpoint is resolvable:
+                      either an HTTP proxy URL or a public IP with port mappings.
                     type: boolean
                   podId:
                     description: RunPod pod ID returned by create and mirrored from
@@ -349,8 +352,10 @@ spec:
                       ready.
                     type: string
                   runtimeEndpoint:
-                    description: Derived endpoint URL built from the first HTTP port
-                      mapping when networking is ready.
+                    description: |-
+                      Derived endpoint URL for the first HTTP port, served through RunPod's
+                      TLS proxy (https://{podId}-{port}.proxy.runpod.net). Present as soon as
+                      the pod ID is known; the proxy returns 502 until the workload listens.
                     type: string
                 required:
                 - networkingReady

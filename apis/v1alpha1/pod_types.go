@@ -108,7 +108,9 @@ type PodObservation struct {
 	// External port numbers keyed by RunPod port token, absent during networking initialization.
 	PortMappings map[string]int32 `json:"portMappings,omitempty"`
 
-	// Derived endpoint URL built from the first HTTP port mapping when networking is ready.
+	// Derived endpoint URL for the first HTTP port, served through RunPod's
+	// TLS proxy (https://{podId}-{port}.proxy.runpod.net). Present as soon as
+	// the pod ID is known; the proxy returns 502 until the workload listens.
 	RuntimeEndpoint string `json:"runtimeEndpoint,omitempty"`
 
 	// Effective hourly pod cost from the RunPod observation response.
@@ -120,7 +122,8 @@ type PodObservation struct {
 	// Timestamp of the last pod start event, parsed from the RunPod response.
 	LastStartedAt *metav1.Time `json:"lastStartedAt,omitempty"`
 
-	// Derived readiness flag, true only when PublicIP is non-empty and PortMappings is non-nil.
+	// Derived readiness flag, true when a connection endpoint is resolvable:
+	// either an HTTP proxy URL or a public IP with port mappings.
 	NetworkingReady bool `json:"networkingReady"`
 }
 
@@ -158,60 +161,60 @@ type PodList struct {
 
 // SetConditions sets the supplied conditions on the Pod status.
 func (p *Pod) SetConditions(c ...xpv1.Condition) {
-	p.Status.ResourceStatus.SetConditions(c...)
+	p.Status.SetConditions(c...)
 }
 
 // GetCondition returns the condition of the supplied type if present.
 func (p *Pod) GetCondition(ct xpv1.ConditionType) xpv1.Condition {
-	return p.Status.ResourceStatus.GetCondition(ct)
+	return p.Status.GetCondition(ct)
 }
 
 // SetProviderConfigReference sets the provider config reference for this Pod.
 func (p *Pod) SetProviderConfigReference(r *xpv1.Reference) {
-	p.Spec.ResourceSpec.ProviderConfigReference = r
+	p.Spec.ProviderConfigReference = r
 }
 
 // GetProviderConfigReference gets the provider config reference for this Pod.
 func (p *Pod) GetProviderConfigReference() *xpv1.Reference {
-	return p.Spec.ResourceSpec.ProviderConfigReference
+	return p.Spec.ProviderConfigReference
 }
 
 // SetWriteConnectionSecretToReference sets the connection secret reference.
 func (p *Pod) SetWriteConnectionSecretToReference(r *xpv1.SecretReference) {
-	p.Spec.ResourceSpec.WriteConnectionSecretToReference = r
+	p.Spec.WriteConnectionSecretToReference = r
 }
 
 // GetWriteConnectionSecretToReference gets the connection secret reference.
 func (p *Pod) GetWriteConnectionSecretToReference() *xpv1.SecretReference {
-	return p.Spec.ResourceSpec.WriteConnectionSecretToReference
+	return p.Spec.WriteConnectionSecretToReference
 }
 
 // SetPublishConnectionDetailsTo sets the publish-connection-details target.
 func (p *Pod) SetPublishConnectionDetailsTo(r *xpv1.PublishConnectionDetailsTo) {
-	p.Spec.ResourceSpec.PublishConnectionDetailsTo = r
+	p.Spec.PublishConnectionDetailsTo = r
 }
 
 // GetPublishConnectionDetailsTo gets the publish-connection-details target.
 func (p *Pod) GetPublishConnectionDetailsTo() *xpv1.PublishConnectionDetailsTo {
-	return p.Spec.ResourceSpec.PublishConnectionDetailsTo
+	return p.Spec.PublishConnectionDetailsTo
 }
 
 // SetManagementPolicies sets management policies for this Pod.
 func (p *Pod) SetManagementPolicies(mp xpv1.ManagementPolicies) {
-	p.Spec.ResourceSpec.ManagementPolicies = mp
+	p.Spec.ManagementPolicies = mp
 }
 
 // GetManagementPolicies gets management policies for this Pod.
 func (p *Pod) GetManagementPolicies() xpv1.ManagementPolicies {
-	return p.Spec.ResourceSpec.ManagementPolicies
+	return p.Spec.ManagementPolicies
 }
 
 // SetDeletionPolicy sets the deletion policy for this Pod.
 func (p *Pod) SetDeletionPolicy(dp xpv1.DeletionPolicy) {
-	p.Spec.ResourceSpec.DeletionPolicy = dp
+	p.Spec.DeletionPolicy = dp
 }
 
 // GetDeletionPolicy gets the deletion policy for this Pod.
 func (p *Pod) GetDeletionPolicy() xpv1.DeletionPolicy {
-	return p.Spec.ResourceSpec.DeletionPolicy
+	return p.Spec.DeletionPolicy
 }

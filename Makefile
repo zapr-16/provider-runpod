@@ -20,7 +20,7 @@ $(CONTROLLER_GEN):
 	go install sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_GEN_VERSION)
 
 $(GOLANGCI_LINT):
-	go install github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
 generate: $(CONTROLLER_GEN) ## Generate deepcopy methods and CRD manifests
 	$(CONTROLLER_GEN) object paths=./apis/...
@@ -39,7 +39,7 @@ reviewable: generate lint ## Run generation and linting
 
 xpkg-build: generate ## Build the Crossplane provider package (.xpkg)
 	rm -f $(XPKG_FILE)
-	crossplane xpkg build --package-root=package --output=$(XPKG_FILE)
+	crossplane xpkg build --package-root=package --package-file=$(XPKG_FILE)
 	@echo "Built $(XPKG_FILE)"
 
 xpkg-push: ## Push the .xpkg to $(XPKG_REG)/$(XPKG_NAME):$(XPKG_TAG)-pkg
