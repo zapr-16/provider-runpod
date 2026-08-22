@@ -161,3 +161,34 @@ these are the deltas:
 - Not exposed (YAGNI for the lab): CPU endpoints (`computeType`,
   `vcpuCount`, `cpuFlavorIds`), CUDA version pinning
   (`allowedCudaVersions`, `minCudaVersion`), multiple network volumes.
+
+## Field notes from live agentic-client testing (2026-08-22)
+
+Found while driving the endpoint from opencode (OpenAI-compatible, streaming,
+tool definitions on every request):
+
+- **Pin the worker image tag.** `runpod/worker-v1-vllm:stable` was removed
+  from the registry; template create fails with a 500 "image not found".
+  Use a released tag (e.g. `v2.25.2`).
+- **Tool calling needs explicit env**: `ENABLE_AUTO_TOOL_CHOICE=true` and
+  `TOOL_CALL_PARSER=hermes` (Qwen). Without them, requests carrying `tools`
+  fail at the worker (`400 "auto tool choice requires..."`, surfaced as an
+  opaque gateway 500 / empty stream).
+- **`MAX_MODEL_LEN` must exceed the client's `max_tokens`**. opencode sends
+  `max_tokens=32000` by default; with a smaller `MAX_MODEL_LEN` vLLM rejects
+  the request and opencode reports an empty step (`finish: "unknown"`).
+  24576 with opencode `limit: {context, output}` capped works.
+  `MAX_MODEL_LEN=49152` left workers "ready" but unable to serve on the
+  24 GB tier (jobs queued forever) — don't set it beyond VRAM reality.
+- **Template env changes do not recycle live workers.** Running/idle workers
+  keep the old env indefinitely (FlashBoot standby never hits idleTimeout).
+  Recycle via `workersMax: 0` then back (exercises the provider's PATCH path).
+- **Killing a streaming client can wedge the worker** (server-side generation
+  continues; the worker stays "running" and new jobs queue). Recovery:
+  `POST /v2/{id}/purge-queue` + worker recycle.
+- **Streaming + image input hangs** at the OpenAI gateway (`/openai/v1`,
+  stream=true + `image_url` content): no bytes, no error. Non-streaming
+  vision (or `/runsync`) with base64 data URLs works; remote image URLs
+  500. If you need vision, send non-streaming requests.
+- **RBAC**: connection-secret publishing needs `create/update/patch/delete`
+  on secrets — `deploy/local/rbac.yaml` was updated accordingly.
