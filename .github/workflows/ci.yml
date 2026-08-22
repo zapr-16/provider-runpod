@@ -19,8 +19,9 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: stable
-          check-latest: true
+          # Pin to go.mod: "stable" drifted to Go 1.27, and golangci-lint
+          # v2.11.4 (built with Go 1.26) panics type-checking 1.27 files.
+          go-version-file: go.mod
 
       - name: Run golangci-lint
         # v7+ is required for golangci-lint v2.x.
@@ -39,8 +40,9 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: stable
-          check-latest: true
+          # Pin to go.mod: "stable" drifted to Go 1.27, and golangci-lint
+          # v2.11.4 (built with Go 1.26) panics type-checking 1.27 files.
+          go-version-file: go.mod
 
       - name: Run tests
         run: go test -v -race ./...
@@ -56,8 +58,9 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: stable
-          check-latest: true
+          # Pin to go.mod: "stable" drifted to Go 1.27, and golangci-lint
+          # v2.11.4 (built with Go 1.26) panics type-checking 1.27 files.
+          go-version-file: go.mod
 
       - name: Build provider binary
         run: go build ./cmd/provider/

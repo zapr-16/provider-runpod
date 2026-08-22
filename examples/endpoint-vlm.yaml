@@ -1,0 +1,41 @@
+# Serverless vLLM endpoint running a vision-language model (Qwen2.5-VL-7B).
+# Serves OpenAI-compatible chat AND image understanding at
+# status.atProvider.openAIBaseURL (Authorization: Bearer <RunPod API key>).
+#
+# Scale-to-zero: costs ~$0 while idle; FlashBoot cold start is ~2-5s once
+# weights are cached on the worker's container disk.
+apiVersion: runpod.crossplane.io/v1alpha1
+kind: Endpoint
+metadata:
+  name: vllm-vl
+  namespace: default
+spec:
+  providerConfigRef:
+    name: default
+  forProvider:
+    imageName: runpod/worker-v1-vllm:v2.25.2
+    env:
+      - name: MODEL_NAME
+        value: "Qwen/Qwen2.5-VL-7B-Instruct"
+      - name: MAX_MODEL_LEN
+        value: "24576"
+      # Required for agentic clients (opencode sends tool definitions):
+      - name: ENABLE_AUTO_TOOL_CHOICE
+        value: "true"
+      - name: TOOL_CALL_PARSER
+        value: "hermes"
+    containerDiskInGb: 40
+    # Ordered by rental priority; serverless uses GPU type IDs like pods.
+    gpuTypeIds:
+      - "NVIDIA GeForce RTX 3090"
+      - "NVIDIA GeForce RTX 4090"
+      - "NVIDIA L4"
+    workersMin: 0        # scale to zero
+    workersMax: 2
+    idleTimeout: 300     # seconds
+    flashBoot: true
+    scalerType: QUEUE_DELAY
+    scalerValue: 4
+  writeConnectionSecretToRef:
+    name: vllm-vl-conn
+    namespace: default

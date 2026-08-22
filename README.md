@@ -87,7 +87,7 @@ spec:
   providerConfigRef:
     name: default
   forProvider:
-    imageName: runpod/worker-v1-vllm:stable
+    imageName: runpod/worker-v1-vllm:v2.25.2
     env:
       - name: MODEL_NAME
         value: "Qwen/Qwen2.5-Coder-7B-Instruct"
@@ -103,6 +103,13 @@ spec:
 Note: unlike pod proxy URLs, the serverless data plane
 (`status.atProvider.runtimeEndpoint`) requires an
 `Authorization: Bearer <RunPod API key>` header on every request.
+
+## Docs
+
+- `docs/local-testing.md` — local kind/Crossplane smoke harness
+- `docs/serverless-endpoints.md` — serverless Endpoint design + field notes
+- `docs/pod-crd-design.md` — Pod CRD field mapping design
+- `docs/runpod-api-reference.md` — RunPod REST API reference notes
 
 ## Development
 

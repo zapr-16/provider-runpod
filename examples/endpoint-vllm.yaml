@@ -13,7 +13,7 @@ spec:
   providerConfigRef:
     name: default
   forProvider:
-    imageName: runpod/worker-v1-vllm:stable
+    imageName: runpod/worker-v1-vllm:v2.25.2
     env:
       - name: MODEL_NAME
         value: "Qwen/Qwen2.5-Coder-7B-Instruct"
