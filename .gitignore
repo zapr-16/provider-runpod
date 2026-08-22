@@ -11,3 +11,4 @@ _output/
 # Without the leading slash this pattern matched cmd/provider/ too.
 /provider
 *.xpkg
+.apm/
