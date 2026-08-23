@@ -145,18 +145,25 @@ func TestConnectDefaultsEmptyKindToClusterProviderConfig(t *testing.T) {
 func TestConnectResolvesNamespacedProviderConfig(t *testing.T) {
 	s := testScheme(t)
 
-	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "runpod-creds", Namespace: "crossplane-system"},
+	// A same-named decoy secret lives in a DIFFERENT namespace. The
+	// namespaced ProviderConfig's secretRef has no namespace field, so
+	// resolution must use the secret in the ProviderConfig's own namespace
+	// ("team-a") and must never reach this one.
+	decoySecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "runpod-creds", Namespace: "other-team"},
+		Data:       map[string][]byte{"apiKey": []byte("other-teams-runpod-key")},
+	}
+	secretInPCNamespace := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "runpod-creds", Namespace: "team-a"},
 		Data:       map[string][]byte{"apiKey": []byte("test-key")},
 	}
-	// The namespaced ProviderConfig lives in the Pod's own namespace.
 	pc := &v1beta1.ProviderConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: "team-config", Namespace: "team-a"},
-		Spec: v1beta1.ProviderConfigSpec{
-			Credentials: xpv2.CommonCredentialSelectors{
-				SecretRef: &xpv2.SecretKeySelector{
-					SecretReference: xpv2.SecretReference{Name: "runpod-creds", Namespace: "crossplane-system"},
-					Key:             "apiKey",
+		Spec: v1beta1.LocalProviderConfigSpec{
+			Credentials: v1beta1.LocalCredentialSelectors{
+				SecretRef: &xpv2.LocalSecretKeySelector{
+					LocalSecretReference: xpv2.LocalSecretReference{Name: "runpod-creds"},
+					Key:                  "apiKey",
 				},
 			},
 		},
@@ -167,7 +174,7 @@ func TestConnectResolvesNamespacedProviderConfig(t *testing.T) {
 	pod.SetGroupVersionKind(v1alpha1.SchemeGroupVersion.WithKind("Pod"))
 	pod.SetProviderConfigReference(&xpv2.ProviderConfigReference{Name: "team-config", Kind: v1beta1.ProviderConfigKind})
 
-	kube := fake.NewClientBuilder().WithScheme(s).WithObjects(secret, pc).Build()
+	kube := fake.NewClientBuilder().WithScheme(s).WithObjects(decoySecret, secretInPCNamespace, pc).Build()
 	c := &connector{
 		kube:  kube,
 		usage: xpresource.NewProviderConfigUsageTracker(kube, &v1beta1.ProviderConfigUsage{}),
@@ -176,6 +183,46 @@ func TestConnectResolvesNamespacedProviderConfig(t *testing.T) {
 
 	if _, err := c.Connect(context.Background(), pod); err != nil {
 		t.Fatalf("Connect() error = %v", err)
+	}
+}
+
+// TestConnectNamespacedProviderConfigCannotUseSecretFromAnotherNamespace is
+// the negative half of the tenancy guarantee: with no secret in the
+// ProviderConfig's own namespace, a same-named secret living elsewhere must
+// NOT be reachable, even though it would satisfy the same secretRef.name.
+func TestConnectNamespacedProviderConfigCannotUseSecretFromAnotherNamespace(t *testing.T) {
+	s := testScheme(t)
+
+	otherNamespaceSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "runpod-creds", Namespace: "other-team"},
+		Data:       map[string][]byte{"apiKey": []byte("other-teams-runpod-key")},
+	}
+	pc := &v1beta1.ProviderConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-config", Namespace: "team-a"},
+		Spec: v1beta1.LocalProviderConfigSpec{
+			Credentials: v1beta1.LocalCredentialSelectors{
+				SecretRef: &xpv2.LocalSecretKeySelector{
+					LocalSecretReference: xpv2.LocalSecretReference{Name: "runpod-creds"},
+					Key:                  "apiKey",
+				},
+			},
+		},
+	}
+	pod := &v1alpha1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-pod", Namespace: "team-a", UID: types.UID("uid-123")},
+	}
+	pod.SetGroupVersionKind(v1alpha1.SchemeGroupVersion.WithKind("Pod"))
+	pod.SetProviderConfigReference(&xpv2.ProviderConfigReference{Name: "team-config", Kind: v1beta1.ProviderConfigKind})
+
+	kube := fake.NewClientBuilder().WithScheme(s).WithObjects(otherNamespaceSecret, pc).Build()
+	c := &connector{
+		kube:  kube,
+		usage: xpresource.NewProviderConfigUsageTracker(kube, &v1beta1.ProviderConfigUsage{}),
+		log:   logr.Discard(),
+	}
+
+	if _, err := c.Connect(context.Background(), pod); err == nil {
+		t.Fatal("Connect() error = nil, want error (secret only exists in another namespace)")
 	}
 }
 

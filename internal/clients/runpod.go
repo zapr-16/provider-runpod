@@ -128,8 +128,10 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 }
 
 // ClientFromCredentials builds an authenticated RunPod client from the
-// common credential selectors carried by either ProviderConfig kind.
-func ClientFromCredentials(ctx context.Context, kube client.Client, creds xpv2.CommonCredentialSelectors) (*Client, error) {
+// common credential selectors carried by either ProviderConfig kind. Any
+// opts are forwarded to NewClient (e.g. WithBaseURL, used by tests to point
+// the credential reconcilers at an httptest server).
+func ClientFromCredentials(ctx context.Context, kube client.Client, creds xpv2.CommonCredentialSelectors, opts ...Option) (*Client, error) {
 	apiKey, err := xpresource.ExtractSecret(ctx, kube, creds)
 	if err != nil {
 		return nil, errors.Wrap(err, errExtractCredentials)
@@ -139,19 +141,48 @@ func ClientFromCredentials(ctx context.Context, kube client.Client, creds xpv2.C
 		return nil, errors.New(errEmptyCredentials)
 	}
 
-	return NewClient(string(apiKey)), nil
+	return NewClient(string(apiKey), opts...), nil
 }
 
 // ClientFromProviderConfig builds an authenticated RunPod client from a
-// namespaced ProviderConfig.
+// namespaced ProviderConfig. The credentials' secretRef, if set, has no
+// namespace field, so it is always resolved in the ProviderConfig's own
+// namespace (pc.Namespace) - a namespace-scoped tenant can never read a
+// secret living elsewhere in the cluster.
 func ClientFromProviderConfig(ctx context.Context, kube client.Client, pc *v1beta1.ProviderConfig) (*Client, error) {
-	return ClientFromCredentials(ctx, kube, pc.Spec.Credentials)
+	return ClientFromCredentials(ctx, kube, pc.Spec.Credentials.ToCommonCredentialSelectors(pc.Namespace))
 }
 
 // ClientFromClusterProviderConfig builds an authenticated RunPod client from
 // a cluster-scoped ClusterProviderConfig.
 func ClientFromClusterProviderConfig(ctx context.Context, kube client.Client, pc *v1beta1.ClusterProviderConfig) (*Client, error) {
 	return ClientFromCredentials(ctx, kube, pc.Spec.Credentials)
+}
+
+// Ping performs a cheap authenticated call (GET /pods) to check that the
+// configured API key is actually accepted by the RunPod API. Any 2xx status
+// means the key works; 401/403 means the key is invalid or revoked; any
+// other status is treated as a transient failure (rate limiting, an outage,
+// ...) rather than a credentials problem.
+func (c *Client) Ping(ctx context.Context) error {
+	req, err := c.NewRequest(ctx, http.MethodGet, "/pods", nil)
+	if err != nil {
+		return errors.Wrap(err, errCreateRequest)
+	}
+
+	resp, err := c.Do(req)
+	if err != nil {
+		return errors.Wrap(err, errDoRequest)
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
+		return nil
+	}
+
+	return errors.Errorf("RunPod GET /pods returned status %d: %s", resp.StatusCode, readErrorBody(resp.Body))
 }
 
 // GetPod retrieves a pod observation payload from the RunPod API. Only a

@@ -5,7 +5,7 @@
       "npm": "@ai-sdk/openai-compatible",
       "name": "RunPod Serverless (vllm-vl)",
       "options": {
-        "baseURL": "https://api.runpod.ai/v2/vllm-k4s9u6vdem9vzh/openai/v1",
+        "baseURL": "https://api.runpod.ai/v2/<your-endpoint-id>/openai/v1",
         "apiKey": "{env:RUNPOD_API_KEY}"
       },
       "models": {

@@ -19,6 +19,8 @@ This repository includes a local Crossplane smoke harness built around `kind`.
   Creates the RunPod credential secret, applies `examples/providerconfig.yaml` (a cluster-scoped `ClusterProviderConfig` named `default`), renders a sample namespaced `Pod` (in the `default` namespace, with `spec.providerConfigRef: {kind: ClusterProviderConfig, name: default}`) using your chosen GPU type, waits for Crossplane to create and observe the external RunPod pod via `status.atProvider.networkingReady`, then deletes the sample resources on exit unless `KEEP_RESOURCES=1`.
 - `hack/local-crossplane-down.sh`
   Deletes managed `Pod` resources to trigger remote cleanup, removes the local provider deployment, and deletes the `kind` cluster unless `DELETE_CLUSTER=0`.
+- `hack/local-crossplane-endpoint-smoke.sh`
+  Exercises in-use protection on an already-provisioned cluster: applies the RunPod credential secret, `examples/providerconfig.yaml`, and `examples/endpoint-vllm.yaml` (a scale-to-zero `Endpoint`, so it's free once idle), waits for it to become Ready and for the `vllm-small-conn` connection secret, then deletes the `ClusterProviderConfig` with `--wait=false` and asserts it is HELD (a `deletionTimestamp`, the `in-use.crossplane.io` finalizer, and `status.users == 1`). It then deletes the `Endpoint`, confirms the held `ClusterProviderConfig` deletion completes once the `Endpoint` is gone, and confirms the endpoint and its implicitly managed template both 404 from RunPod's REST API. Like the pod smoke script, it skips cleanly (exit 0) without `RUNPOD_API_KEY`.
 
 ## Usage
 

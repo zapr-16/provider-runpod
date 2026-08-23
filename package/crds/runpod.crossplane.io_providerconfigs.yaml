@@ -48,17 +48,21 @@ spec:
             type: object
           spec:
             description: |-
-              ProviderConfigSpec defines the desired state of a RunPod ProviderConfig.
-              The credential shape (a secret reference with an "apiKey" key) is
-              preserved unchanged from the pre-v2 ProviderConfig.
+              LocalProviderConfigSpec defines the desired state of a namespace-scoped
+              RunPod ProviderConfig. Its credentials.secretRef has NO namespace field:
+              the referenced secret is always resolved in the ProviderConfig's own
+              namespace, so a namespace-scoped tenant can never point at a secret
+              living elsewhere in the cluster.
             properties:
               credentials:
-                description: Credentials used to authenticate to the RunPod REST API.
+                description: |-
+                  Credentials used to authenticate to the RunPod REST API. Any
+                  secretRef is resolved in this ProviderConfig's own namespace.
                 properties:
                   env:
                     description: |-
-                      Env is a reference to an environment variable that contains credentials
-                      that must be used to connect to the provider.
+                      Env is a reference to an environment variable that contains
+                      credentials that must be used to connect to the provider.
                     properties:
                       name:
                         description: Name is the name of an environment variable.
@@ -68,8 +72,8 @@ spec:
                     type: object
                   fs:
                     description: |-
-                      Fs is a reference to a filesystem location that contains credentials that
-                      must be used to connect to the provider.
+                      Fs is a reference to a filesystem location that contains credentials
+                      that must be used to connect to the provider.
                     properties:
                       path:
                         description: Path is a filesystem path.
@@ -79,22 +83,18 @@ spec:
                     type: object
                   secretRef:
                     description: |-
-                      A SecretRef is a reference to a secret key that contains the credentials
-                      that must be used to connect to the provider.
+                      A SecretRef is a reference to a secret key, in this ProviderConfig's
+                      own namespace, that contains the credentials that must be used to
+                      connect to the provider.
                     properties:
                       key:
-                        description: The key to select.
                         type: string
                       name:
                         description: Name of the secret.
                         type: string
-                      namespace:
-                        description: Namespace of the secret.
-                        type: string
                     required:
                     - key
                     - name
-                    - namespace
                     type: object
                 type: object
             required:

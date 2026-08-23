@@ -3,6 +3,8 @@ package providerconfig
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +24,19 @@ import (
 	v1beta1 "github.com/zapr-16/provider-runpod/apis/v1beta1"
 )
 
+// newPingServer starts an httptest server that answers every GET /pods
+// with the given status code, standing in for the RunPod API so credential
+// validation tests stay hermetic (no real network call).
+func newPingServer(t *testing.T, status int) *httptest.Server {
+	t.Helper()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(status)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
 func testScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 
@@ -37,12 +52,16 @@ func testScheme(t *testing.T) *runtime.Scheme {
 
 func newProviderConfig(name string) *v1beta1.ProviderConfig {
 	return &v1beta1.ProviderConfig{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
-		Spec: v1beta1.ProviderConfigSpec{
-			Credentials: xpv2.CommonCredentialSelectors{
-				SecretRef: &xpv2.SecretKeySelector{
-					SecretReference: xpv2.SecretReference{Name: "runpod-creds", Namespace: "crossplane-system"},
-					Key:             "apiKey",
+		// The namespaced ProviderConfig's secretRef has no namespace field:
+		// the secret is always resolved in the ProviderConfig's own
+		// namespace, so it must live in the same namespace as the secret
+		// used by these tests (newSecret uses "crossplane-system").
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "crossplane-system"},
+		Spec: v1beta1.LocalProviderConfigSpec{
+			Credentials: v1beta1.LocalCredentialSelectors{
+				SecretRef: &xpv2.LocalSecretKeySelector{
+					LocalSecretReference: xpv2.LocalSecretReference{Name: "runpod-creds"},
+					Key:                  "apiKey",
 				},
 			},
 		},
@@ -88,11 +107,12 @@ func TestReconcileValidCredentialsSetsReadyAndRequeues(t *testing.T) {
 	s := testScheme(t)
 	pc := newProviderConfig("default")
 	secret := newSecret("test-key")
+	srv := newPingServer(t, http.StatusOK)
 
 	kube := fake.NewClientBuilder().WithScheme(s).WithObjects(pc, secret).WithStatusSubresource(pc).Build()
-	r := &Reconciler{kube: kube, zapLogger: zap.NewNop()}
+	r := &Reconciler{kube: kube, zapLogger: zap.NewNop(), baseURL: srv.URL}
 
-	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "default"}})
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "default", Namespace: "crossplane-system"}})
 	if err != nil {
 		t.Fatalf("Reconcile() error = %v, want nil", err)
 	}
@@ -101,7 +121,7 @@ func TestReconcileValidCredentialsSetsReadyAndRequeues(t *testing.T) {
 	}
 
 	got := &v1beta1.ProviderConfig{}
-	if err := kube.Get(context.Background(), types.NamespacedName{Name: "default"}, got); err != nil {
+	if err := kube.Get(context.Background(), types.NamespacedName{Name: "default", Namespace: "crossplane-system"}, got); err != nil {
 		t.Fatalf("Get(ProviderConfig) error = %v", err)
 	}
 	cond := got.GetCondition(xpv2.TypeReady)
@@ -117,7 +137,7 @@ func TestReconcileMissingSecretSetsUnavailableAndReturnsError(t *testing.T) {
 	kube := fake.NewClientBuilder().WithScheme(s).WithObjects(pc).WithStatusSubresource(pc).Build()
 	r := &Reconciler{kube: kube, zapLogger: zap.NewNop()}
 
-	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "default"}})
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "default", Namespace: "crossplane-system"}})
 	if err == nil {
 		t.Fatal("Reconcile() error = nil, want non-nil")
 	}
@@ -129,7 +149,7 @@ func TestReconcileMissingSecretSetsUnavailableAndReturnsError(t *testing.T) {
 	}
 
 	got := &v1beta1.ProviderConfig{}
-	if err := kube.Get(context.Background(), types.NamespacedName{Name: "default"}, got); err != nil {
+	if err := kube.Get(context.Background(), types.NamespacedName{Name: "default", Namespace: "crossplane-system"}, got); err != nil {
 		t.Fatalf("Get(ProviderConfig) error = %v", err)
 	}
 	cond := got.GetCondition(xpv2.TypeReady)
@@ -146,7 +166,7 @@ func TestReconcileEmptySecretValueSetsUnavailableAndReturnsError(t *testing.T) {
 	kube := fake.NewClientBuilder().WithScheme(s).WithObjects(pc, secret).WithStatusSubresource(pc).Build()
 	r := &Reconciler{kube: kube, zapLogger: zap.NewNop()}
 
-	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "default"}})
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "default", Namespace: "crossplane-system"}})
 	if err == nil {
 		t.Fatal("Reconcile() error = nil, want non-nil")
 	}
@@ -158,7 +178,40 @@ func TestReconcileEmptySecretValueSetsUnavailableAndReturnsError(t *testing.T) {
 	}
 
 	got := &v1beta1.ProviderConfig{}
-	if err := kube.Get(context.Background(), types.NamespacedName{Name: "default"}, got); err != nil {
+	if err := kube.Get(context.Background(), types.NamespacedName{Name: "default", Namespace: "crossplane-system"}, got); err != nil {
+		t.Fatalf("Get(ProviderConfig) error = %v", err)
+	}
+	cond := got.GetCondition(xpv2.TypeReady)
+	if cond.Status != corev1.ConditionFalse || cond.Reason != xpv2.ReasonUnavailable {
+		t.Fatalf("condition = %#v, want Ready/False/Unavailable", cond)
+	}
+}
+
+// TestReconcileRevokedCredentialsSetsUnavailableAndReturnsError is the core
+// A2 guarantee: a secret that exists and is non-empty, but that the RunPod
+// API itself rejects (e.g. a revoked key), must NOT be reported Available.
+func TestReconcileRevokedCredentialsSetsUnavailableAndReturnsError(t *testing.T) {
+	s := testScheme(t)
+	pc := newProviderConfig("default")
+	secret := newSecret("revoked-key")
+	srv := newPingServer(t, http.StatusUnauthorized)
+
+	kube := fake.NewClientBuilder().WithScheme(s).WithObjects(pc, secret).WithStatusSubresource(pc).Build()
+	r := &Reconciler{kube: kube, zapLogger: zap.NewNop(), baseURL: srv.URL}
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "default", Namespace: "crossplane-system"}})
+	if err == nil {
+		t.Fatal("Reconcile() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), errInvalidCredentials) {
+		t.Fatalf("Reconcile() error = %q, want to contain %q", err.Error(), errInvalidCredentials)
+	}
+	if res != (ctrl.Result{}) {
+		t.Fatalf("Reconcile() result = %#v, want empty result", res)
+	}
+
+	got := &v1beta1.ProviderConfig{}
+	if err := kube.Get(context.Background(), types.NamespacedName{Name: "default", Namespace: "crossplane-system"}, got); err != nil {
 		t.Fatalf("Get(ProviderConfig) error = %v", err)
 	}
 	cond := got.GetCondition(xpv2.TypeReady)
@@ -171,6 +224,7 @@ func TestReconcileStatusUpdateFailureOnValidCredentials(t *testing.T) {
 	s := testScheme(t)
 	pc := newProviderConfig("default")
 	secret := newSecret("test-key")
+	srv := newPingServer(t, http.StatusOK)
 
 	kube := fake.NewClientBuilder().
 		WithScheme(s).
@@ -185,9 +239,9 @@ func TestReconcileStatusUpdateFailureOnValidCredentials(t *testing.T) {
 			},
 		}).
 		Build()
-	r := &Reconciler{kube: kube, zapLogger: zap.NewNop()}
+	r := &Reconciler{kube: kube, zapLogger: zap.NewNop(), baseURL: srv.URL}
 
-	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "default"}})
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "default", Namespace: "crossplane-system"}})
 	if err == nil {
 		t.Fatal("Reconcile() error = nil, want non-nil")
 	}
@@ -218,7 +272,7 @@ func TestReconcileStatusUpdateFailureOnMissingCredentials(t *testing.T) {
 		Build()
 	r := &Reconciler{kube: kube, zapLogger: zap.NewNop()}
 
-	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "default"}})
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "default", Namespace: "crossplane-system"}})
 	if err == nil {
 		t.Fatal("Reconcile() error = nil, want non-nil")
 	}
@@ -234,6 +288,90 @@ func TestReconcileStatusUpdateFailureOnMissingCredentials(t *testing.T) {
 	}
 	if res != (ctrl.Result{}) {
 		t.Fatalf("Reconcile() result = %#v, want empty result", res)
+	}
+}
+
+// TestReconcileSkipsStatusUpdateWhenReadyConditionUnchanged is the A4
+// guarantee: reconciling twice with the same outcome must not repeat the
+// status write (SetConditions already preserves LastTransitionTime for an
+// equal-state Ready condition, so re-writing status on every 5-minute
+// requeue is pure conflict churn with no observable benefit).
+func TestReconcileSkipsStatusUpdateWhenReadyConditionUnchanged(t *testing.T) {
+	s := testScheme(t)
+	pc := newProviderConfig("default")
+	secret := newSecret("test-key")
+	srv := newPingServer(t, http.StatusOK)
+
+	var statusUpdateCount int
+	kube := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(pc, secret).
+		WithStatusSubresource(pc).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourceUpdate: func(ctx context.Context, c client.Client, subResourceName string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+				if subResourceName == "status" {
+					statusUpdateCount++
+				}
+				return c.SubResource(subResourceName).Update(ctx, obj, opts...)
+			},
+		}).
+		Build()
+	r := &Reconciler{kube: kube, zapLogger: zap.NewNop(), baseURL: srv.URL}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "default", Namespace: "crossplane-system"}}
+
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("first Reconcile() error = %v", err)
+	}
+	if statusUpdateCount != 1 {
+		t.Fatalf("status update count after first Reconcile() = %d, want 1", statusUpdateCount)
+	}
+
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("second Reconcile() error = %v", err)
+	}
+	if statusUpdateCount != 1 {
+		t.Fatalf("status update count after second Reconcile() = %d, want 1 (unchanged Ready condition must skip the write)", statusUpdateCount)
+	}
+}
+
+// TestClusterReconcileSkipsStatusUpdateWhenReadyConditionUnchanged mirrors
+// TestReconcileSkipsStatusUpdateWhenReadyConditionUnchanged for the
+// cluster-scoped reconciler.
+func TestClusterReconcileSkipsStatusUpdateWhenReadyConditionUnchanged(t *testing.T) {
+	s := testScheme(t)
+	pc := newClusterProviderConfig("default")
+	secret := newSecret("test-key")
+	srv := newPingServer(t, http.StatusOK)
+
+	var statusUpdateCount int
+	kube := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(pc, secret).
+		WithStatusSubresource(pc).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourceUpdate: func(ctx context.Context, c client.Client, subResourceName string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+				if subResourceName == "status" {
+					statusUpdateCount++
+				}
+				return c.SubResource(subResourceName).Update(ctx, obj, opts...)
+			},
+		}).
+		Build()
+	r := &ClusterReconciler{kube: kube, zapLogger: zap.NewNop(), baseURL: srv.URL}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "default"}}
+
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("first Reconcile() error = %v", err)
+	}
+	if statusUpdateCount != 1 {
+		t.Fatalf("status update count after first Reconcile() = %d, want 1", statusUpdateCount)
+	}
+
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("second Reconcile() error = %v", err)
+	}
+	if statusUpdateCount != 1 {
+		t.Fatalf("status update count after second Reconcile() = %d, want 1 (unchanged Ready condition must skip the write)", statusUpdateCount)
 	}
 }
 
@@ -255,9 +393,10 @@ func TestClusterReconcileValidCredentialsSetsReadyAndRequeues(t *testing.T) {
 	s := testScheme(t)
 	pc := newClusterProviderConfig("default")
 	secret := newSecret("test-key")
+	srv := newPingServer(t, http.StatusOK)
 
 	kube := fake.NewClientBuilder().WithScheme(s).WithObjects(pc, secret).WithStatusSubresource(pc).Build()
-	r := &ClusterReconciler{kube: kube, zapLogger: zap.NewNop()}
+	r := &ClusterReconciler{kube: kube, zapLogger: zap.NewNop(), baseURL: srv.URL}
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "default"}})
 	if err != nil {
@@ -334,10 +473,44 @@ func TestClusterReconcileEmptySecretValueSetsUnavailableAndReturnsError(t *testi
 	}
 }
 
+// TestClusterReconcileRevokedCredentialsSetsUnavailableAndReturnsError
+// mirrors TestReconcileRevokedCredentialsSetsUnavailableAndReturnsError for
+// the cluster-scoped reconciler: a revoked key must not be Available.
+func TestClusterReconcileRevokedCredentialsSetsUnavailableAndReturnsError(t *testing.T) {
+	s := testScheme(t)
+	pc := newClusterProviderConfig("default")
+	secret := newSecret("revoked-key")
+	srv := newPingServer(t, http.StatusUnauthorized)
+
+	kube := fake.NewClientBuilder().WithScheme(s).WithObjects(pc, secret).WithStatusSubresource(pc).Build()
+	r := &ClusterReconciler{kube: kube, zapLogger: zap.NewNop(), baseURL: srv.URL}
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "default"}})
+	if err == nil {
+		t.Fatal("Reconcile() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), errInvalidCredentials) {
+		t.Fatalf("Reconcile() error = %q, want to contain %q", err.Error(), errInvalidCredentials)
+	}
+	if res != (ctrl.Result{}) {
+		t.Fatalf("Reconcile() result = %#v, want empty result", res)
+	}
+
+	got := &v1beta1.ClusterProviderConfig{}
+	if err := kube.Get(context.Background(), types.NamespacedName{Name: "default"}, got); err != nil {
+		t.Fatalf("Get(ClusterProviderConfig) error = %v", err)
+	}
+	cond := got.GetCondition(xpv2.TypeReady)
+	if cond.Status != corev1.ConditionFalse || cond.Reason != xpv2.ReasonUnavailable {
+		t.Fatalf("condition = %#v, want Ready/False/Unavailable", cond)
+	}
+}
+
 func TestClusterReconcileStatusUpdateFailureOnValidCredentials(t *testing.T) {
 	s := testScheme(t)
 	pc := newClusterProviderConfig("default")
 	secret := newSecret("test-key")
+	srv := newPingServer(t, http.StatusOK)
 
 	kube := fake.NewClientBuilder().
 		WithScheme(s).
@@ -352,7 +525,7 @@ func TestClusterReconcileStatusUpdateFailureOnValidCredentials(t *testing.T) {
 			},
 		}).
 		Build()
-	r := &ClusterReconciler{kube: kube, zapLogger: zap.NewNop()}
+	r := &ClusterReconciler{kube: kube, zapLogger: zap.NewNop(), baseURL: srv.URL}
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "default"}})
 	if err == nil {
@@ -420,7 +593,7 @@ func TestReconcileGetErrorOtherThanNotFoundIsWrapped(t *testing.T) {
 		Build()
 	r := &Reconciler{kube: kube, zapLogger: zap.NewNop()}
 
-	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "default"}})
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "default", Namespace: "crossplane-system"}})
 	if err == nil {
 		t.Fatal("Reconcile() error = nil, want non-nil")
 	}

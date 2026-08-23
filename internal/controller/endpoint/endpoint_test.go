@@ -85,21 +85,34 @@ func TestConnectDefaultsEmptyKindAndResolvesNamespacedConfig(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "runpod-creds", Namespace: "crossplane-system"},
 		Data:       map[string][]byte{"apiKey": []byte("test-key")},
 	}
-	creds := v1beta1.ProviderConfigSpec{
-		Credentials: xpv2.CommonCredentialSelectors{
-			SecretRef: &xpv2.SecretKeySelector{
-				SecretReference: xpv2.SecretReference{Name: "runpod-creds", Namespace: "crossplane-system"},
-				Key:             "apiKey",
-			},
-		},
+	// The namespaced ProviderConfig's secretRef has no namespace field, so
+	// its secret must live in "team-a" (its own namespace), while the
+	// ClusterProviderConfig keeps the arbitrary-namespace secretRef shape.
+	namespacedSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "runpod-creds", Namespace: "team-a"},
+		Data:       map[string][]byte{"apiKey": []byte("test-key")},
 	}
 	clusterPC := &v1beta1.ClusterProviderConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: "default"},
-		Spec:       creds,
+		Spec: v1beta1.ProviderConfigSpec{
+			Credentials: xpv2.CommonCredentialSelectors{
+				SecretRef: &xpv2.SecretKeySelector{
+					SecretReference: xpv2.SecretReference{Name: "runpod-creds", Namespace: "crossplane-system"},
+					Key:             "apiKey",
+				},
+			},
+		},
 	}
 	namespacedPC := &v1beta1.ProviderConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: "team-config", Namespace: "team-a"},
-		Spec:       creds,
+		Spec: v1beta1.LocalProviderConfigSpec{
+			Credentials: v1beta1.LocalCredentialSelectors{
+				SecretRef: &xpv2.LocalSecretKeySelector{
+					LocalSecretReference: xpv2.LocalSecretReference{Name: "runpod-creds"},
+					Key:                  "apiKey",
+				},
+			},
+		},
 	}
 
 	tests := map[string]struct {
@@ -128,7 +141,7 @@ func TestConnectDefaultsEmptyKindAndResolvesNamespacedConfig(t *testing.T) {
 			ep.SetGroupVersionKind(v1alpha1.SchemeGroupVersion.WithKind("Endpoint"))
 			ep.SetProviderConfigReference(tc.ref)
 
-			kube := fake.NewClientBuilder().WithScheme(s).WithObjects(secret, clusterPC, namespacedPC).Build()
+			kube := fake.NewClientBuilder().WithScheme(s).WithObjects(secret, namespacedSecret, clusterPC, namespacedPC).Build()
 			c := &connector{
 				kube:  kube,
 				usage: xpresource.NewProviderConfigUsageTracker(kube, &v1beta1.ProviderConfigUsage{}),

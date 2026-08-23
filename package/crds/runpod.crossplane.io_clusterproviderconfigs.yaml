@@ -47,9 +47,11 @@ spec:
             type: object
           spec:
             description: |-
-              ProviderConfigSpec defines the desired state of a RunPod ProviderConfig.
-              The credential shape (a secret reference with an "apiKey" key) is
-              preserved unchanged from the pre-v2 ProviderConfig.
+              ProviderConfigSpec defines the desired state of a RunPod
+              ClusterProviderConfig. The credential shape (a secret reference with an
+              "apiKey" key) is preserved unchanged from the pre-v2 ProviderConfig; its
+              secretRef carries a namespace, letting cluster admins centralize keys in
+              one namespace (e.g. crossplane-system) for use across the whole cluster.
             properties:
               credentials:
                 description: Credentials used to authenticate to the RunPod REST API.

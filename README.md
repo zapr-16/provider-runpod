@@ -27,7 +27,7 @@ The provider ships as two OCI artifacts: a controller image and a
 Crossplane package (`.xpkg`) that references it. Install the package:
 
 ```bash
-crossplane xpkg install provider ghcr.io/zapr-16/provider-runpod:v0.3.0-pkg
+crossplane xpkg install provider ghcr.io/zapr-16/provider-runpod:v0.4.0-pkg
 ```
 
 (The `-pkg` suffix distinguishes the package from the raw controller
@@ -86,6 +86,7 @@ metadata:
   namespace: default
 spec:
   providerConfigRef:
+    kind: ClusterProviderConfig
     name: default
   forProvider:
     imageName: runpod/base:0.4.4
@@ -113,6 +114,7 @@ metadata:
   namespace: default
 spec:
   providerConfigRef:
+    kind: ClusterProviderConfig
     name: default
   forProvider:
     imageName: runpod/worker-v1-vllm:v2.25.2
@@ -131,6 +133,13 @@ spec:
 Note: unlike pod proxy URLs, the serverless data plane
 (`status.atProvider.runtimeEndpoint`) requires an
 `Authorization: Bearer <RunPod API key>` header on every request.
+
+To point a tool such as [opencode](https://opencode.ai) at a provisioned
+endpoint, see `opencode.json` in this repo: replace the
+`<your-endpoint-id>` placeholder in `provider.runpod.options.baseURL` with
+the ID from `status.atProvider.endpointId` (or the `RUNPOD_ENDPOINT_ID`
+you chose), and export `RUNPOD_API_KEY` in your shell so `{env:RUNPOD_API_KEY}`
+resolves.
 
 ## Docs
 
