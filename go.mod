@@ -1,6 +1,6 @@
 module github.com/zapr-16/provider-runpod
 
-go 1.26.2
+go 1.26.3
 
 require (
 	github.com/crossplane/crossplane-runtime/v2 v2.4.0
