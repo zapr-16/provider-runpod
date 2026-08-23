@@ -8,11 +8,10 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"unsafe"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
-	"github.com/crossplane/crossplane-runtime/pkg/meta"
-	managed "github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
+	managed "github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -26,8 +25,9 @@ func TestObserve(t *testing.T) {
 		exists          bool
 		upToDate        bool
 		lateInit        bool
+		driftDetected   bool
 		readyStatus     corev1.ConditionStatus
-		readyReason     xpv1.ConditionReason
+		readyReason     xpv2.ConditionReason
 		networkingReady bool
 		podID           string
 		runtimeEndpoint string
@@ -61,7 +61,9 @@ func TestObserve(t *testing.T) {
 		status       v1alpha1.PodObservation
 		statusCode   int
 		response     *runpodclient.PodResponse
+		probeDown    bool
 		wantCalls    int
+		wantErr      bool
 		want         want
 	}{
 		"EmptyExternalName": {
@@ -69,13 +71,41 @@ func TestObserve(t *testing.T) {
 				exists: false,
 			},
 		},
-		"Non2xxTreatsPodAsMissing": {
+		"NotFoundTreatsPodAsMissing": {
 			externalName: "pod-123",
 			statusCode:   http.StatusNotFound,
 			wantCalls:    1,
 			want: want{
 				exists: false,
 			},
+		},
+		"ServerErrorReturnsError": {
+			// A transient 5xx must NOT look like a missing pod: the
+			// reconciler would Create() a duplicate and orphan the old
+			// (still billing) one.
+			externalName: "pod-123",
+			statusCode:   http.StatusInternalServerError,
+			wantCalls:    1,
+			wantErr:      true,
+		},
+		"RateLimitedReturnsError": {
+			externalName: "pod-123",
+			statusCode:   http.StatusTooManyRequests,
+			wantCalls:    1,
+			wantErr:      true,
+		},
+		"UnauthorizedReturnsError": {
+			externalName: "pod-123",
+			statusCode:   http.StatusUnauthorized,
+			wantCalls:    1,
+			wantErr:      true,
+		},
+		"InvalidExternalNameReturnsError": {
+			// A crafted external-name must never reach the RunPod API as a
+			// URL path segment.
+			externalName: "pod-123/../../v1/endpoints/victim",
+			wantCalls:    0,
+			wantErr:      true,
 		},
 		"RunningWithNetworkingReadyIsAvailable": {
 			externalName: "pod-123",
@@ -94,7 +124,7 @@ func TestObserve(t *testing.T) {
 				upToDate:        true,
 				lateInit:        false,
 				readyStatus:     corev1.ConditionTrue,
-				readyReason:     xpv1.ReasonAvailable,
+				readyReason:     xpv2.ReasonAvailable,
 				networkingReady: true,
 				podID:           "pod-123",
 				runtimeEndpoint: "https://pod-123-8888.proxy.runpod.net",
@@ -125,7 +155,7 @@ func TestObserve(t *testing.T) {
 				upToDate:        true,
 				lateInit:        false,
 				readyStatus:     corev1.ConditionTrue,
-				readyReason:     xpv1.ReasonAvailable,
+				readyReason:     xpv2.ReasonAvailable,
 				networkingReady: true,
 				podID:           "pod-123",
 				runtimeEndpoint: "https://pod-123-8000.proxy.runpod.net",
@@ -152,7 +182,7 @@ func TestObserve(t *testing.T) {
 				upToDate:        true,
 				lateInit:        false,
 				readyStatus:     corev1.ConditionFalse,
-				readyReason:     xpv1.ReasonCreating,
+				readyReason:     xpv2.ReasonCreating,
 				networkingReady: false,
 				podID:           "pod-123",
 				connection: managed.ConnectionDetails{
@@ -173,7 +203,7 @@ func TestObserve(t *testing.T) {
 				exists:          true,
 				upToDate:        true,
 				readyStatus:     corev1.ConditionFalse,
-				readyReason:     xpv1.ReasonUnavailable,
+				readyReason:     xpv2.ReasonUnavailable,
 				networkingReady: false,
 				podID:           "pod-123",
 				connection: managed.ConnectionDetails{
@@ -194,7 +224,7 @@ func TestObserve(t *testing.T) {
 				exists:          true,
 				upToDate:        true,
 				readyStatus:     corev1.ConditionFalse,
-				readyReason:     xpv1.ReasonUnavailable,
+				readyReason:     xpv2.ReasonUnavailable,
 				networkingReady: false,
 				podID:           "pod-123",
 				connection: managed.ConnectionDetails{
@@ -202,24 +232,35 @@ func TestObserve(t *testing.T) {
 				},
 			},
 		},
-		"TerminatedWithRecreateOnTerminateClearsExternalName": {
+		"RunningWithProxyProbeFailingIsCreating": {
+			// The proxy URL is derived from the pod ID alone; until the
+			// container actually listens the proxy returns 502 — the pod
+			// must not go Available on a dead endpoint.
 			externalName: "pod-123",
 			spec: v1alpha1.PodParameters{
-				RecreateOnTerminate: ptrBool(true),
+				Ports: []v1alpha1.Port{
+					{Number: 22, Protocol: "tcp"},
+					{Number: 8888, Protocol: "http"},
+				},
 			},
 			status:     v1alpha1.PodObservation{PodID: "existing"},
 			statusCode: http.StatusOK,
-			response: &runpodclient.PodResponse{
-				ID:            "pod-123",
-				DesiredStatus: "TERMINATED",
-			},
-			wantCalls: 1,
+			response:   readyResponse,
+			probeDown:  true,
+			wantCalls:  1,
 			want: want{
-				exists:          false,
-				upToDate:        false,
+				exists:          true,
+				upToDate:        true,
 				readyStatus:     corev1.ConditionFalse,
-				readyReason:     xpv1.ReasonUnavailable,
+				readyReason:     xpv2.ReasonCreating,
 				networkingReady: false,
+				podID:           "pod-123",
+				runtimeEndpoint: "https://pod-123-8888.proxy.runpod.net",
+				connection: managed.ConnectionDetails{
+					"podId":    []byte("pod-123"),
+					"endpoint": []byte("https://pod-123-8888.proxy.runpod.net"),
+					"port":     []byte("8888"),
+				},
 			},
 		},
 		"UnknownStatusIsUnavailable": {
@@ -235,7 +276,7 @@ func TestObserve(t *testing.T) {
 				exists:          true,
 				upToDate:        true,
 				readyStatus:     corev1.ConditionFalse,
-				readyReason:     xpv1.ReasonUnavailable,
+				readyReason:     xpv2.ReasonUnavailable,
 				networkingReady: false,
 				podID:           "pod-123",
 				connection: managed.ConnectionDetails{
@@ -259,7 +300,7 @@ func TestObserve(t *testing.T) {
 				upToDate:        true,
 				lateInit:        false,
 				readyStatus:     corev1.ConditionTrue,
-				readyReason:     xpv1.ReasonAvailable,
+				readyReason:     xpv2.ReasonAvailable,
 				networkingReady: true,
 				podID:           "pod-123",
 				runtimeEndpoint: "https://pod-123-8888.proxy.runpod.net",
@@ -270,7 +311,10 @@ func TestObserve(t *testing.T) {
 				},
 			},
 		},
-		"EnvDriftMarksNotUpToDate": {
+		"EnvDriftIsSurfacedInStatusButStaysUpToDate": {
+			// Pods are immutable in the RunPod API: reporting not-up-to-date
+			// would make the reconciler call a no-op Update() forever. Drift
+			// is surfaced via status.atProvider.driftDetected instead.
 			externalName: "pod-123",
 			spec: v1alpha1.PodParameters{
 				Env: []v1alpha1.EnvVar{{Name: "MODE", Value: "dev"}},
@@ -281,9 +325,10 @@ func TestObserve(t *testing.T) {
 			wantCalls:  1,
 			want: want{
 				exists:          true,
-				upToDate:        false,
+				upToDate:        true,
+				driftDetected:   true,
 				readyStatus:     corev1.ConditionTrue,
-				readyReason:     xpv1.ReasonAvailable,
+				readyReason:     xpv2.ReasonAvailable,
 				networkingReady: true,
 				podID:           "pod-123",
 				connection: managed.ConnectionDetails{
@@ -301,7 +346,7 @@ func TestObserve(t *testing.T) {
 				exists:          true,
 				upToDate:        true,
 				readyStatus:     corev1.ConditionTrue,
-				readyReason:     xpv1.ReasonAvailable,
+				readyReason:     xpv2.ReasonAvailable,
 				networkingReady: true,
 				podID:           "pod-123",
 				connection: managed.ConnectionDetails{
@@ -309,7 +354,7 @@ func TestObserve(t *testing.T) {
 				},
 			},
 		},
-		"PortsDriftMarksNotUpToDate": {
+		"PortsDriftIsSurfacedInStatusButStaysUpToDate": {
 			externalName: "pod-123",
 			spec: v1alpha1.PodParameters{
 				Ports: []v1alpha1.Port{{Number: 9999, Protocol: "http"}},
@@ -320,9 +365,10 @@ func TestObserve(t *testing.T) {
 			wantCalls:  1,
 			want: want{
 				exists:          true,
-				upToDate:        false,
+				upToDate:        true,
+				driftDetected:   true,
 				readyStatus:     corev1.ConditionTrue,
-				readyReason:     xpv1.ReasonAvailable,
+				readyReason:     xpv2.ReasonAvailable,
 				networkingReady: true,
 				podID:           "pod-123",
 				runtimeEndpoint: "https://pod-123-9999.proxy.runpod.net",
@@ -343,7 +389,7 @@ func TestObserve(t *testing.T) {
 				exists:          true,
 				upToDate:        true,
 				readyStatus:     corev1.ConditionTrue,
-				readyReason:     xpv1.ReasonAvailable,
+				readyReason:     xpv2.ReasonAvailable,
 				networkingReady: true,
 				podID:           "pod-123",
 				connection: managed.ConnectionDetails{
@@ -387,11 +433,21 @@ func TestObserve(t *testing.T) {
 			}
 
 			e := &external{
-				client: newTestClient(t, server),
-				log:    logr.Discard(),
+				client:    newTestClient(t, server),
+				log:       logr.Discard(),
+				probeHTTP: stubProbe(!tc.probeDown),
 			}
 
 			got, err := e.Observe(context.Background(), p)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("Observe() error = nil, want non-nil")
+				}
+				if calls != tc.wantCalls {
+					t.Fatalf("Observe() HTTP calls = %d, want %d", calls, tc.wantCalls)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("Observe() error = %v", err)
 			}
@@ -409,7 +465,7 @@ func TestObserve(t *testing.T) {
 				if got.ResourceLateInitialized != tc.want.lateInit {
 					t.Fatalf("Observe() ResourceLateInitialized = %v, want %v", got.ResourceLateInitialized, tc.want.lateInit)
 				}
-				ready := p.GetCondition(xpv1.TypeReady)
+				ready := p.GetCondition(xpv2.TypeReady)
 				if ready.Status != tc.want.readyStatus {
 					t.Fatalf("Observe() Ready status = %v, want %v", ready.Status, tc.want.readyStatus)
 				}
@@ -424,6 +480,9 @@ func TestObserve(t *testing.T) {
 				}
 				if p.Status.AtProvider.RuntimeEndpoint != tc.want.runtimeEndpoint {
 					t.Fatalf("Observe() RuntimeEndpoint = %q, want %q", p.Status.AtProvider.RuntimeEndpoint, tc.want.runtimeEndpoint)
+				}
+				if p.Status.AtProvider.DriftDetected != tc.want.driftDetected {
+					t.Fatalf("Observe() DriftDetected = %v, want %v", p.Status.AtProvider.DriftDetected, tc.want.driftDetected)
 				}
 				if !reflect.DeepEqual(got.ConnectionDetails, tc.want.connection) {
 					t.Fatalf("Observe() ConnectionDetails = %#v, want %#v", got.ConnectionDetails, tc.want.connection)
@@ -494,7 +553,7 @@ func TestCreate(t *testing.T) {
 		if meta.GetExternalName(p) != "pod-created" {
 			t.Fatalf("Create() external name = %q, want %q", meta.GetExternalName(p), "pod-created")
 		}
-		if diff := reflect.DeepEqual(got.ConnectionDetails, managed.ConnectionDetails{"podId": []byte("pod-created")}); !diff {
+		if !reflect.DeepEqual(got.ConnectionDetails, managed.ConnectionDetails{"podId": []byte("pod-created")}) {
 			t.Fatalf("Create() connection details = %#v, want %#v", got.ConnectionDetails, managed.ConnectionDetails{"podId": []byte("pod-created")})
 		}
 		if gotBody.Name == nil || *gotBody.Name != "vllm-test" {
@@ -571,7 +630,7 @@ func TestDelete(t *testing.T) {
 		}
 	})
 
-	t.Run("Non2xxTreatsDeleteAsSuccess", func(t *testing.T) {
+	t.Run("NotFoundTreatsDeleteAsSuccess", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusNotFound)
 		}))
@@ -583,6 +642,61 @@ func TestDelete(t *testing.T) {
 		e := &external{client: newTestClient(t, server), log: logr.Discard()}
 		if _, err := e.Delete(context.Background(), p); err != nil {
 			t.Fatalf("Delete() error = %v", err)
+		}
+	})
+
+	t.Run("GoneTreatsDeleteAsSuccess", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusGone)
+		}))
+		defer server.Close()
+
+		p := &v1alpha1.Pod{}
+		meta.SetExternalName(p, "pod-123")
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+		if _, err := e.Delete(context.Background(), p); err != nil {
+			t.Fatalf("Delete() error = %v", err)
+		}
+	})
+
+	t.Run("ServerErrorReturnsError", func(t *testing.T) {
+		// A failed DELETE must be retried: swallowing it removes the
+		// finalizer while the pod keeps running and billing.
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer server.Close()
+
+		p := &v1alpha1.Pod{}
+		meta.SetExternalName(p, "pod-123")
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+		_, err := e.Delete(context.Background(), p)
+		if err == nil {
+			t.Fatal("Delete() error = nil, want non-nil")
+		}
+		if !strings.Contains(err.Error(), errDeletePod) {
+			t.Fatalf("Delete() error = %q, want wrapped %q", err.Error(), errDeletePod)
+		}
+	})
+
+	t.Run("InvalidExternalNameReturnsError", func(t *testing.T) {
+		var calls int
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+		}))
+		defer server.Close()
+
+		p := &v1alpha1.Pod{}
+		meta.SetExternalName(p, "pod-123/../../v1/endpoints/victim")
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+		if _, err := e.Delete(context.Background(), p); err == nil {
+			t.Fatal("Delete() error = nil, want non-nil")
+		}
+		if calls != 0 {
+			t.Fatalf("Delete() HTTP calls = %d, want 0", calls)
 		}
 	})
 
@@ -599,6 +713,113 @@ func TestDelete(t *testing.T) {
 		}
 		if calls != 0 {
 			t.Fatalf("Delete() HTTP calls = %d, want 0", calls)
+		}
+	})
+}
+
+func TestObserveRecreateOnTerminate(t *testing.T) {
+	terminated := &runpodclient.PodResponse{
+		ID:            "pod-123",
+		DesiredStatus: "TERMINATED",
+	}
+
+	newPod := func() *v1alpha1.Pod {
+		p := &v1alpha1.Pod{
+			Spec: v1alpha1.PodSpec{ForProvider: v1alpha1.PodParameters{
+				RecreateOnTerminate: ptrBool(true),
+			}},
+			Status: v1alpha1.PodStatus{AtProvider: v1alpha1.PodObservation{PodID: "existing"}},
+		}
+		meta.SetExternalName(p, "pod-123")
+		return p
+	}
+
+	t.Run("DeletesOldPodThenClearsExternalName", func(t *testing.T) {
+		// Terminated pods retain their disk and keep billing storage; the
+		// old pod must be deleted before the ID is dropped, or every Spot
+		// reclaim leaks one.
+		var methods []string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			methods = append(methods, r.Method)
+			if r.URL.Path != "/pods/pod-123" {
+				t.Fatalf("unexpected path: %s", r.URL.Path)
+			}
+			switch r.Method {
+			case http.MethodGet:
+				_ = json.NewEncoder(w).Encode(terminated)
+			case http.MethodDelete:
+				w.WriteHeader(http.StatusNoContent)
+			default:
+				t.Fatalf("unexpected method: %s", r.Method)
+			}
+		}))
+		defer server.Close()
+
+		p := newPod()
+		e := &external{client: newTestClient(t, server), log: logr.Discard(), probeHTTP: stubProbe(true)}
+
+		got, err := e.Observe(context.Background(), p)
+		if err != nil {
+			t.Fatalf("Observe() error = %v", err)
+		}
+		if got.ResourceExists {
+			t.Fatal("Observe() ResourceExists = true, want false")
+		}
+		if !reflect.DeepEqual(methods, []string{"GET", "DELETE"}) {
+			t.Fatalf("Observe() HTTP methods = %v, want [GET DELETE]", methods)
+		}
+		if meta.GetExternalName(p) != "" {
+			t.Fatalf("Observe() external name = %q, want cleared", meta.GetExternalName(p))
+		}
+	})
+
+	t.Run("AlreadyGoneOldPodStillClearsExternalName", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case http.MethodGet:
+				_ = json.NewEncoder(w).Encode(terminated)
+			case http.MethodDelete:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer server.Close()
+
+		p := newPod()
+		e := &external{client: newTestClient(t, server), log: logr.Discard(), probeHTTP: stubProbe(true)}
+
+		got, err := e.Observe(context.Background(), p)
+		if err != nil {
+			t.Fatalf("Observe() error = %v", err)
+		}
+		if got.ResourceExists {
+			t.Fatal("Observe() ResourceExists = true, want false")
+		}
+		if meta.GetExternalName(p) != "" {
+			t.Fatalf("Observe() external name = %q, want cleared", meta.GetExternalName(p))
+		}
+	})
+
+	t.Run("DeleteFailureReturnsErrorAndKeepsExternalName", func(t *testing.T) {
+		// If cleanup fails the pod ID must survive so the next reconcile
+		// can retry — clearing it would permanently orphan the pod.
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case http.MethodGet:
+				_ = json.NewEncoder(w).Encode(terminated)
+			case http.MethodDelete:
+				w.WriteHeader(http.StatusInternalServerError)
+			}
+		}))
+		defer server.Close()
+
+		p := newPod()
+		e := &external{client: newTestClient(t, server), log: logr.Discard(), probeHTTP: stubProbe(true)}
+
+		if _, err := e.Observe(context.Background(), p); err == nil {
+			t.Fatal("Observe() error = nil, want non-nil")
+		}
+		if meta.GetExternalName(p) != "pod-123" {
+			t.Fatalf("Observe() external name = %q, want preserved %q", meta.GetExternalName(p), "pod-123")
 		}
 	})
 }
@@ -622,6 +843,13 @@ func TestHasEnvDrift(t *testing.T) {
 	}{
 		"NilDesiredDoesNotDrift": {
 			observed: map[string]string{},
+			want:     false,
+		},
+		"EmptyDesiredDoesNotDrift": {
+			// Empty and nil both mean "unmanaged": the PATCH payload uses
+			// omitempty, so an empty value could never be reconciled anyway.
+			desired:  []v1alpha1.EnvVar{},
+			observed: map[string]string{"MODE": "prod"},
 			want:     false,
 		},
 		"MatchingValuesDoNotDrift": {
@@ -652,6 +880,11 @@ func TestHasPortsDrift(t *testing.T) {
 		want     bool
 	}{
 		"NilDesiredDoesNotDrift": {
+			observed: []string{"8888/http"},
+			want:     false,
+		},
+		"EmptyDesiredDoesNotDrift": {
+			desired:  []v1alpha1.Port{},
 			observed: []string{"8888/http"},
 			want:     false,
 		},
@@ -768,17 +1001,14 @@ func TestParsePodStartedAt(t *testing.T) {
 func newTestClient(t *testing.T, server *httptest.Server) *runpodclient.Client {
 	t.Helper()
 
-	c := runpodclient.NewClient("test-key")
-	setUnexportedField(t, c, "baseURL", server.URL)
-	setUnexportedField(t, c, "httpClient", server.Client())
-	return c
+	return runpodclient.NewClient("test-key",
+		runpodclient.WithBaseURL(server.URL),
+		runpodclient.WithHTTPClient(server.Client()),
+	)
+}
+
+func stubProbe(up bool) func(context.Context, string) bool {
+	return func(context.Context, string) bool { return up }
 }
 
 func ptrBool(b bool) *bool { return &b }
-
-func setUnexportedField(t *testing.T, target any, name string, value any) {
-	t.Helper()
-
-	v := reflect.ValueOf(target).Elem().FieldByName(name)
-	reflect.NewAt(v.Type(), unsafe.Pointer(v.UnsafeAddr())).Elem().Set(reflect.ValueOf(value))
-}

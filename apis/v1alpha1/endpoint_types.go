@@ -1,8 +1,19 @@
 package v1alpha1
 
 import (
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
+	"reflect"
+
+	resource "github.com/crossplane/crossplane-runtime/v2/pkg/resource"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+)
+
+// interface checks to ensure Endpoint conforms to the crossplane-runtime v2
+// namespaced managed-resource interfaces.
+var (
+	_ resource.ModernManaged = &Endpoint{}
+	_ resource.ManagedList   = &EndpointList{}
 )
 
 // ScalerType selects the autoscaling strategy for a serverless endpoint.
@@ -112,14 +123,14 @@ type EndpointObservation struct {
 
 // EndpointSpec defines the desired state of a RunPod serverless Endpoint.
 type EndpointSpec struct {
-	xpv1.ResourceSpec `json:",inline"`
-	ForProvider       EndpointParameters `json:"forProvider"`
+	xpv2.ManagedResourceSpec `json:",inline"`
+	ForProvider              EndpointParameters `json:"forProvider"`
 }
 
 // EndpointStatus reflects the observed state of a RunPod serverless Endpoint.
 type EndpointStatus struct {
-	xpv1.ResourceStatus `json:",inline"`
-	AtProvider          EndpointObservation `json:"atProvider,omitempty"`
+	xpv2.ManagedResourceStatus `json:",inline"`
+	AtProvider                 EndpointObservation `json:"atProvider,omitempty"`
 }
 
 // An Endpoint is a managed RunPod serverless endpoint: autoscaled GPU
@@ -144,61 +155,58 @@ type EndpointList struct {
 }
 
 // SetConditions sets the supplied conditions on the Endpoint status.
-func (e *Endpoint) SetConditions(c ...xpv1.Condition) {
+func (e *Endpoint) SetConditions(c ...xpv2.Condition) {
 	e.Status.SetConditions(c...)
 }
 
 // GetCondition returns the condition of the supplied type if present.
-func (e *Endpoint) GetCondition(ct xpv1.ConditionType) xpv1.Condition {
+func (e *Endpoint) GetCondition(ct xpv2.ConditionType) xpv2.Condition {
 	return e.Status.GetCondition(ct)
 }
 
 // SetProviderConfigReference sets the provider config reference for this Endpoint.
-func (e *Endpoint) SetProviderConfigReference(r *xpv1.Reference) {
+func (e *Endpoint) SetProviderConfigReference(r *xpv2.ProviderConfigReference) {
 	e.Spec.ProviderConfigReference = r
 }
 
 // GetProviderConfigReference gets the provider config reference for this Endpoint.
-func (e *Endpoint) GetProviderConfigReference() *xpv1.Reference {
+func (e *Endpoint) GetProviderConfigReference() *xpv2.ProviderConfigReference {
 	return e.Spec.ProviderConfigReference
 }
 
 // SetWriteConnectionSecretToReference sets the connection secret reference.
-func (e *Endpoint) SetWriteConnectionSecretToReference(r *xpv1.SecretReference) {
+func (e *Endpoint) SetWriteConnectionSecretToReference(r *xpv2.LocalSecretReference) {
 	e.Spec.WriteConnectionSecretToReference = r
 }
 
 // GetWriteConnectionSecretToReference gets the connection secret reference.
-func (e *Endpoint) GetWriteConnectionSecretToReference() *xpv1.SecretReference {
+func (e *Endpoint) GetWriteConnectionSecretToReference() *xpv2.LocalSecretReference {
 	return e.Spec.WriteConnectionSecretToReference
 }
 
-// SetPublishConnectionDetailsTo sets the publish-connection-details target.
-func (e *Endpoint) SetPublishConnectionDetailsTo(r *xpv1.PublishConnectionDetailsTo) {
-	e.Spec.PublishConnectionDetailsTo = r
-}
-
-// GetPublishConnectionDetailsTo gets the publish-connection-details target.
-func (e *Endpoint) GetPublishConnectionDetailsTo() *xpv1.PublishConnectionDetailsTo {
-	return e.Spec.PublishConnectionDetailsTo
-}
-
 // SetManagementPolicies sets management policies for this Endpoint.
-func (e *Endpoint) SetManagementPolicies(mp xpv1.ManagementPolicies) {
+func (e *Endpoint) SetManagementPolicies(mp xpv2.ManagementPolicies) {
 	e.Spec.ManagementPolicies = mp
 }
 
 // GetManagementPolicies gets management policies for this Endpoint.
-func (e *Endpoint) GetManagementPolicies() xpv1.ManagementPolicies {
+func (e *Endpoint) GetManagementPolicies() xpv2.ManagementPolicies {
 	return e.Spec.ManagementPolicies
 }
 
-// SetDeletionPolicy sets the deletion policy for this Endpoint.
-func (e *Endpoint) SetDeletionPolicy(dp xpv1.DeletionPolicy) {
-	e.Spec.DeletionPolicy = dp
+// GetItems returns the list items as the runtime's Managed interface.
+func (l *EndpointList) GetItems() []resource.Managed {
+	items := make([]resource.Managed, len(l.Items))
+	for i := range l.Items {
+		items[i] = &l.Items[i]
+	}
+	return items
 }
 
-// GetDeletionPolicy gets the deletion policy for this Endpoint.
-func (e *Endpoint) GetDeletionPolicy() xpv1.DeletionPolicy {
-	return e.Spec.DeletionPolicy
-}
+// Endpoint type metadata.
+var (
+	EndpointKind             = reflect.TypeOf(Endpoint{}).Name()
+	EndpointGroupKind        = schema.GroupKind{Group: Group, Kind: EndpointKind}.String()
+	EndpointKindAPIVersion   = EndpointKind + "." + SchemeGroupVersion.String()
+	EndpointGroupVersionKind = SchemeGroupVersion.WithKind(EndpointKind)
+)

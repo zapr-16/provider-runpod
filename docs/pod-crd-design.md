@@ -42,12 +42,14 @@ Recommended `PodParameters` fields:
 | `GPUTypeIDs` | `[]string` | `gpuTypeIds,omitempty` | `// +optional` | Ordered set of acceptable RunPod GPU type IDs for placement. |
 | `GPUCount` | `*int32` | `gpuCount,omitempty` | `// +optional` | Number of GPUs requested for the pod. |
 | `CloudType` | `*CloudType` | `cloudType,omitempty` | `// +optional` | RunPod cloud class for scheduling, limited to `SECURE` or `COMMUNITY`. |
+| `SupportPublicIP` | `*bool` | `supportPublicIp,omitempty` | `// +optional` | Request a public IP for COMMUNITY cloud pods so exposed ports receive external mappings. |
 | `ContainerDiskInGb` | `*int32` | `containerDiskInGb,omitempty` | `// +optional` | Size of the ephemeral container disk in GiB. |
 | `VolumeInGb` | `*int32` | `volumeInGb,omitempty` | `// +optional` | Size of the persisted pod volume in GiB. |
 | `VolumeMountPath` | `*string` | `volumeMountPath,omitempty` | `// +optional` | Mount path inside the container for the persisted pod volume. |
 | `Env` | `[]EnvVar` | `env,omitempty` | `// +optional` | Environment variables injected into the container at startup. |
 | `Ports` | `[]Port` | `ports,omitempty` | `// +optional` | Container ports to expose, later serialized to RunPod `"<port>/<protocol>"` strings. |
 | `DockerStartCmd` | `[]string` | `dockerStartCmd,omitempty` | `// +optional` | Command array passed to the container as its startup command. |
+| `RecreateOnTerminate` | `*bool` | `recreateOnTerminate,omitempty` | `// +optional` | When true, clears the external name and reports the resource missing once RunPod marks the pod `EXITED`/`TERMINATED` (Spot reclaim, OOM, manual delete), so the next reconcile calls `Create()` and provisions a fresh pod with the same spec. Defaults to false (manual recreate). Shipped after v0.1; not part of the immutable-or-drift classification below since it controls controller behavior rather than the RunPod pod payload. |
 
 Fields intentionally excluded from v0.1:
 
@@ -71,6 +73,7 @@ These `ForProvider` fields should receive `// +immutable` markers because changi
 | `GPUTypeIDs` | Yes | Changing the acceptable GPU types changes placement constraints and should be treated as a new scheduling request. |
 | `GPUCount` | Yes | Resizing GPU count changes the machine shape and should be handled as replacement in v0.1. |
 | `CloudType` | Yes | Moving between `SECURE` and `COMMUNITY` changes the placement domain and pricing model rather than mutable runtime state. |
+| `SupportPublicIP` | Yes | Affects network placement at scheduling time; not a runtime-mutable setting. |
 | `ContainerDiskInGb` | Yes | Ephemeral container disk size is part of pod provisioning and the documented API surface does not define an in-place resize path. |
 | `VolumeInGb` | Yes | Persisted volume size is provision-time storage configuration and should not be mutated implicitly by the controller. |
 | `VolumeMountPath` | Yes | The volume mount path changes container filesystem layout and is safer as a recreate-only setting. |
@@ -102,17 +105,18 @@ Recommended `PodObservation` fields:
 | `DesiredStatus` | `string` | `desiredStatus,omitempty` | Raw RunPod lifecycle status from `GET /pods/{podId}`. |
 | `PublicIP` | `string` | `publicIp,omitempty` | Public IP assigned to the pod once networking is ready. |
 | `PortMappings` | `map[string]int32` | `portMappings,omitempty` | External port numbers keyed by RunPod port token, absent during the networking initialization window. |
-| `RuntimeEndpoint` | `string` | `runtimeEndpoint,omitempty` | Derived endpoint URL built from the first HTTP port mapping when networking is ready. |
+| `RuntimeEndpoint` | `string` | `runtimeEndpoint,omitempty` | For an `http` port, the RunPod TLS proxy URL `https://{podId}-{port}.proxy.runpod.net`, resolvable as soon as the pod ID is known (the proxy itself returns 502 until the workload listens). Empty when the declared ports have no `http` entry. |
 | `CostPerHr` | `float64` | `costPerHr,omitempty` | Effective hourly pod cost from the RunPod observation response. |
 | `GPUDisplayName` | `string` | `gpuDisplayName,omitempty` | Human-readable GPU name from `machine.gpuDisplayName`, or from the nested GPU object as fallback. |
 | `LastStartedAt` | `*metav1.Time` | `lastStartedAt,omitempty` | Timestamp of the last pod start event, parsed from the RunPod response. |
-| `NetworkingReady` | `bool` | `networkingReady` | Derived readiness flag, true only when `PublicIP` is non-empty and `PortMappings` is non-nil. |
+| `NetworkingReady` | `bool` | `networkingReady` | Derived readiness flag. True once a connection endpoint is resolvable (an `http` proxy URL, or a public IP with port mappings for non-`http` ports) **and**, whenever `desiredStatus=RUNNING` and an `http` proxy URL was resolved, an HTTP probe of that proxy URL returns a status below 500 — i.e. the workload itself answered, not just RunPod's proxy. |
+| `DriftDetected` | `bool` | `driftDetected,omitempty` | True when the mutable-looking spec fields (`Env`, `Ports`) diverge from the running pod. Since pods are immutable, this can never be reconciled by `Update()`; it is surfaced here instead of blocking the `Synced` condition. |
 
 Derivation rules:
 
-- `NetworkingReady = (PublicIP != "" && PortMappings != nil)`
-- `RuntimeEndpoint` is empty until `NetworkingReady` is true and an HTTP port can be resolved.
-- `GPUDisplayName` should prefer `machine.gpuDisplayName` because it reflects the attached machine type seen during observation.
+- `RuntimeEndpoint`/`endpoint` resolution happens through `resolveConnectionTarget`: it looks for the first declared `Port` with protocol `http` and, if found, always returns the proxy URL for it (regardless of `PublicIP`/`PortMappings`). Only when no `http` port is declared does it fall back to resolving the first port that has an entry in `PortMappings`, using `PublicIP:externalPort` — but that fallback is not surfaced as `RuntimeEndpoint` in `AtProvider`, only as the `port` connection-detail key (see Section 4).
+- `NetworkingReady` starts as `(endpoint != "") || (PublicIP != "" && PortMappings != nil)`, then — only when an `http` endpoint was resolved and `desiredStatus == "RUNNING"` — is overridden by the result of probing that endpoint over HTTP(S). A pod with only TCP ports never gets HTTP-probed, so it becomes ready purely from public IP + port mappings.
+- `GPUDisplayName` prefers `machine.gpuDisplayName`, falls back to `gpu.displayName`, then to `machine.gpuTypeId` if both are empty.
 
 ## Section 4 — Drift detection strategy + ConnectionDetails
 
@@ -133,6 +137,7 @@ Default-handling rules:
 - If `ForProvider.Env` is omitted, do not mark drift solely because RunPod returns an empty or default env object.
 - If `ForProvider.Ports` is omitted, do not mark drift solely because RunPod applies its default port list.
 - Immutable fields are never compared for drift; changes to them are replacement semantics, not update semantics.
+- Drift is never reported through `ResourceUpToDate` (`Observe()` always reports the pod up-to-date, and `Update()` is a permanent no-op — pods are immutable in the RunPod API, so there is no in-place update to perform). It is surfaced only through `status.atProvider.driftDetected`, so it never blocks the `Synced` condition or causes reconcile churn.
 
 Fields explicitly not drift-compared:
 
@@ -140,6 +145,7 @@ Fields explicitly not drift-compared:
 - `GPUTypeIDs`
 - `GPUCount`
 - `CloudType`
+- `SupportPublicIP`
 - `ContainerDiskInGb`
 - `VolumeInGb`
 - `VolumeMountPath`
@@ -147,7 +153,7 @@ Fields explicitly not drift-compared:
 
 ### State-to-condition mapping
 
-Use this exact mapping in `Observe()`:
+The shipped mapping in `Observe()`:
 
 - `RUNNING + NetworkingReady=true -> Available`
 - `RUNNING + NetworkingReady=false -> Creating`
@@ -155,29 +161,25 @@ Use this exact mapping in `Observe()`:
 - `TERMINATED -> Unavailable`
 - `Unknown or empty desiredStatus -> Unavailable` with a warning log
 
+For `EXITED`/`TERMINATED`, if `spec.forProvider.recreateOnTerminate` is true, the controller additionally deletes the old pod via the RunPod API, clears the external-name annotation, and reports `ResourceExists: false` instead of setting `Unavailable` — so the next reconcile calls `Create()` and provisions a fresh pod with the same spec. The delete-before-clearing-external-name ordering matters: the external name is the only record of the old pod ID, and a terminated pod still bills for its volume until deleted.
+
 Why this mapping is required:
 
 - The RunPod REST API does not publish a `STARTING` state.
 - The same pod can already be `RUNNING` while `publicIp` and `portMappings` are still not populated.
-- Readiness therefore depends on both lifecycle state and networking readiness.
+- Readiness therefore depends on both lifecycle state and networking readiness, and — for `http` ports — on an HTTP probe actually reaching the workload through RunPod's proxy (see Section 3's `NetworkingReady` derivation).
 
 ### ConnectionDetails
 
 Publish these keys:
 
-- `endpoint`: the first HTTP port mapping URL derived as `http://<PublicIP>:<externalPort>`
-- `podId`: the external name / RunPod pod ID
-- `port`: the first mapped external port rendered as a string
+- `podId`: the external name / RunPod pod ID (always present once the pod exists)
+- `endpoint`: present only when the declared ports include an `http` entry; its value is the RunPod TLS proxy URL `https://{podId}-{port}.proxy.runpod.net` for that port
+- `port`: the external port as a string — the `http` port's number when `endpoint` was resolved, otherwise the first declared port whose RunPod port token resolves against `AtProvider.PortMappings` (requires a non-empty `PublicIP`)
 
-Deterministic selection rules:
+Resolution rules (`resolveConnectionTarget`):
 
 1. Iterate through `ForProvider.Ports` in declared order.
-2. Select the first port whose protocol is `http` for `endpoint`.
-3. Resolve its RunPod port token against `AtProvider.PortMappings`.
-4. Build `endpoint` only when `PublicIP` is non-empty and the mapping exists.
-5. For `port`, use the same selected external port; if there is no HTTP port, use the first declared port that resolves successfully.
-6. If no configured port resolves, leave `endpoint` and `port` empty rather than guessing from map iteration order.
-
-Implementation note:
-
-- Because RunPod defaults ports when none are provided, Task 4.1 should not attempt to derive a stable public endpoint from an unordered `portMappings` map when the spec omitted `Ports`.
+2. If any port has protocol `http`, return its proxy URL as `endpoint` and its number as `port` immediately — this path does not consult `PublicIP` or `PortMappings` at all.
+3. Otherwise, if there are no ports, or `PublicIP` is empty, or `PortMappings` is nil, resolve nothing (`endpoint` and `port` are both omitted).
+4. Otherwise, walk the declared ports in order and return the first one with a matching entry in `PortMappings` as `port`, with `endpoint` left empty (only `http` ports get a synthesized `endpoint`).

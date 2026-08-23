@@ -29,17 +29,47 @@ rules:
       - create
       - patch
       - update
+  # Leader election locks.
+  - apiGroups:
+      - coordination.k8s.io
+    resources:
+      - leases
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
   - apiGroups:
       - runpod.crossplane.io
     resources:
       - providerconfigs
       - providerconfigs/status
+      - providerconfigs/finalizers
+      - clusterproviderconfigs
+      - clusterproviderconfigs/status
+      - clusterproviderconfigs/finalizers
     verbs:
       - get
       - list
       - watch
       - update
       - patch
+  # Usage records powering ProviderConfig in-use deletion protection.
+  - apiGroups:
+      - runpod.crossplane.io
+    resources:
+      - providerconfigusages
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
   - apiGroups:
       - runpod.crossplane.io
     resources:

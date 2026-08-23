@@ -41,8 +41,9 @@ apiVersion: runpod.crossplane.io/v1alpha1
 kind: Endpoint
 metadata:
   name: vllm-small
+  namespace: default
 spec:
-  providerConfigRef: { name: default }
+  providerConfigRef: { kind: ClusterProviderConfig, name: default }
   forProvider:
     # template (managed implicitly by the controller)
     imageName: runpod/worker-v1-vllm:stable
@@ -145,6 +146,15 @@ these are the deltas:
   `POST /endpoints/{id}/update`); template drift is handled with
   `PATCH /templates/{templateId}`. Both are exercised by `Update()` — the
   first real Update implementation in the provider, as planned.
+- **Namespaced, not cluster-scoped.** `Endpoint` (like `Pod`) is a namespaced
+  managed resource on crossplane-runtime v2's `xpv2.ManagedResourceSpec`,
+  requiring Crossplane >= v2.0. `providerConfigRef` is typed
+  `{kind, name}`; `kind` is required by the CRD schema whenever
+  `providerConfigRef` is specified at all — the whole-object default
+  (`{kind: ClusterProviderConfig, name: default}`) only kicks in when the
+  field is omitted entirely. `writeConnectionSecretToRef` carries only
+  `name`: the connection secret always lands in the `Endpoint`'s own
+  namespace.
 - **Option B (implicit template) shipped.** Create makes template → endpoint
   and cleans up the template if the endpoint create fails; Delete resolves
   the template ID from status (or a GET fallback), deletes the endpoint,

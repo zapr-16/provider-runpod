@@ -4,17 +4,17 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.20.1
-  name: providerconfigs.runpod.crossplane.io
+  name: clusterproviderconfigs.runpod.crossplane.io
 spec:
   group: runpod.crossplane.io
   names:
     categories:
     - crossplane
-    kind: ProviderConfig
-    listKind: ProviderConfigList
-    plural: providerconfigs
-    singular: providerconfig
-  scope: Namespaced
+    kind: ClusterProviderConfig
+    listKind: ClusterProviderConfigList
+    plural: clusterproviderconfigs
+    singular: clusterproviderconfig
+  scope: Cluster
   versions:
   - additionalPrinterColumns:
     - jsonPath: .metadata.creationTimestamp
@@ -24,10 +24,9 @@ spec:
     schema:
       openAPIV3Schema:
         description: |-
-          A ProviderConfig configures credentials for the RunPod provider. It is
-          namespace-scoped, so it can only be referenced by managed resources in the
-          same namespace. Use ClusterProviderConfig to share credentials across
-          namespaces.
+          A ClusterProviderConfig configures credentials for the RunPod provider
+          that can be shared across namespaces. It carries the same credential
+          shape as the namespaced ProviderConfig.
         properties:
           apiVersion:
             description: |-

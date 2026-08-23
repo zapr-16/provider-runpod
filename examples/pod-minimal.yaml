@@ -7,6 +7,9 @@ metadata:
     app.kubernetes.io/name: provider-runpod-local-smoke
 spec:
   providerConfigRef:
+    # kind is required by the CRD schema; the whole-object default only
+    # applies when providerConfigRef is omitted entirely.
+    kind: ClusterProviderConfig
     name: default
   forProvider:
     imageName: python:3.11-slim

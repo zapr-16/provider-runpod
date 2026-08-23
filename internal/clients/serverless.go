@@ -4,10 +4,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	stdlog "log"
 	"net/http"
 
 	"github.com/pkg/errors"
+)
+
+const (
+	templatesPath       = "/templates"
+	templatesPathPrefix = templatesPath + "/"
+	endpointsPath       = "/endpoints"
+	endpointsPathPrefix = endpointsPath + "/"
 )
 
 // CreateTemplateRequest mirrors the RunPod template create payload used for
@@ -101,7 +107,7 @@ type EndpointResponse struct {
 // CreateTemplate creates a RunPod template and returns its ID.
 func (c *Client) CreateTemplate(ctx context.Context, payload CreateTemplateRequest) (string, error) {
 	var out TemplateResponse
-	if err := c.doJSON(ctx, http.MethodPost, "/templates", payload, &out); err != nil {
+	if err := c.doJSON(ctx, http.MethodPost, templatesPath, payload, &out); err != nil {
 		return "", err
 	}
 	return out.ID, nil
@@ -109,18 +115,25 @@ func (c *Client) CreateTemplate(ctx context.Context, payload CreateTemplateReque
 
 // UpdateTemplate patches a RunPod template.
 func (c *Client) UpdateTemplate(ctx context.Context, templateID string, payload UpdateTemplateRequest) error {
-	return c.doJSON(ctx, http.MethodPatch, "/templates/"+templateID, payload, nil)
+	if err := validateResourceID(templateID); err != nil {
+		return err
+	}
+	return c.doJSON(ctx, http.MethodPatch, templatesPathPrefix+templateID, payload, nil)
 }
 
-// DeleteTemplate deletes a RunPod template, tolerating already-gone semantics.
+// DeleteTemplate deletes a RunPod template. Already-gone responses count as
+// success; other failures are returned as errors.
 func (c *Client) DeleteTemplate(ctx context.Context, templateID string) error {
-	return c.deleteTolerant(ctx, "/templates/"+templateID)
+	if err := validateResourceID(templateID); err != nil {
+		return err
+	}
+	return c.deleteStrict(ctx, templatesPathPrefix+templateID)
 }
 
 // CreateEndpoint creates a RunPod serverless endpoint and returns its ID.
 func (c *Client) CreateEndpoint(ctx context.Context, payload CreateEndpointRequest) (string, error) {
 	var out EndpointResponse
-	if err := c.doJSON(ctx, http.MethodPost, "/endpoints", payload, &out); err != nil {
+	if err := c.doJSON(ctx, http.MethodPost, endpointsPath, payload, &out); err != nil {
 		return "", err
 	}
 	return out.ID, nil
@@ -129,7 +142,11 @@ func (c *Client) CreateEndpoint(ctx context.Context, payload CreateEndpointReque
 // GetTemplate retrieves a template from the RunPod API. Unlike the template
 // embedded in the endpoint response, this includes imageName.
 func (c *Client) GetTemplate(ctx context.Context, templateID string) (*TemplateResponse, bool, error) {
-	req, err := c.NewRequest(ctx, http.MethodGet, "/templates/"+templateID, nil)
+	if err := validateResourceID(templateID); err != nil {
+		return nil, false, err
+	}
+
+	req, err := c.NewRequest(ctx, http.MethodGet, templatesPathPrefix+templateID, nil)
 	if err != nil {
 		return nil, false, errors.Wrap(err, errCreateRequest)
 	}
@@ -142,9 +159,11 @@ func (c *Client) GetTemplate(ctx context.Context, templateID string) (*TemplateR
 		_ = resp.Body.Close()
 	}()
 
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		stdlog.Printf("RunPod GET /templates/%s returned status %d; treating as not found; body=%s", templateID, resp.StatusCode, readErrorBody(resp.Body))
+	if resp.StatusCode == http.StatusNotFound {
 		return nil, false, nil
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, false, errors.Errorf("RunPod GET /templates/%s returned status %d: %s", templateID, resp.StatusCode, readErrorBody(resp.Body))
 	}
 
 	var out TemplateResponse
@@ -155,9 +174,15 @@ func (c *Client) GetTemplate(ctx context.Context, templateID string) (*TemplateR
 	return &out, true, nil
 }
 
-// GetEndpoint retrieves a serverless endpoint observation from the RunPod API.
+// GetEndpoint retrieves a serverless endpoint observation from the RunPod
+// API. Only a 404 means "not found"; other non-2xx statuses are errors so a
+// transient failure never triggers a duplicate Create.
 func (c *Client) GetEndpoint(ctx context.Context, endpointID string) (*EndpointResponse, bool, error) {
-	req, err := c.NewRequest(ctx, http.MethodGet, "/endpoints/"+endpointID+"?includeWorkers=true", nil)
+	if err := validateResourceID(endpointID); err != nil {
+		return nil, false, err
+	}
+
+	req, err := c.NewRequest(ctx, http.MethodGet, endpointsPathPrefix+endpointID+"?includeWorkers=true", nil)
 	if err != nil {
 		return nil, false, errors.Wrap(err, errCreateRequest)
 	}
@@ -170,9 +195,11 @@ func (c *Client) GetEndpoint(ctx context.Context, endpointID string) (*EndpointR
 		_ = resp.Body.Close()
 	}()
 
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		stdlog.Printf("RunPod GET /endpoints/%s returned status %d; treating as not found; body=%s", endpointID, resp.StatusCode, readErrorBody(resp.Body))
+	if resp.StatusCode == http.StatusNotFound {
 		return nil, false, nil
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, false, errors.Errorf("RunPod GET /endpoints/%s returned status %d: %s", endpointID, resp.StatusCode, readErrorBody(resp.Body))
 	}
 
 	var out EndpointResponse
@@ -185,12 +212,20 @@ func (c *Client) GetEndpoint(ctx context.Context, endpointID string) (*EndpointR
 
 // UpdateEndpoint patches mutable fields of a RunPod serverless endpoint.
 func (c *Client) UpdateEndpoint(ctx context.Context, endpointID string, payload UpdateEndpointRequest) error {
-	return c.doJSON(ctx, http.MethodPatch, "/endpoints/"+endpointID, payload, nil)
+	if err := validateResourceID(endpointID); err != nil {
+		return err
+	}
+	return c.doJSON(ctx, http.MethodPatch, endpointsPathPrefix+endpointID, payload, nil)
 }
 
-// DeleteEndpoint deletes a RunPod serverless endpoint, tolerating already-gone semantics.
+// DeleteEndpoint deletes a RunPod serverless endpoint. Already-gone responses
+// count as success; other failures are returned as errors so deletion retries
+// instead of dropping the finalizer while the endpoint keeps billing.
 func (c *Client) DeleteEndpoint(ctx context.Context, endpointID string) error {
-	return c.deleteTolerant(ctx, "/endpoints/"+endpointID)
+	if err := validateResourceID(endpointID); err != nil {
+		return err
+	}
+	return c.deleteStrict(ctx, endpointsPathPrefix+endpointID)
 }
 
 // doJSON executes a JSON request against the RunPod API and decodes the
@@ -227,9 +262,10 @@ func (c *Client) doJSON(ctx context.Context, method, path string, payload any, o
 	return nil
 }
 
-// deleteTolerant issues a DELETE and treats non-2xx statuses as success,
-// matching the pod delete semantics.
-func (c *Client) deleteTolerant(ctx context.Context, path string) error {
+// deleteStrict issues a DELETE, treating only already-gone statuses
+// (404/410) as success; everything else non-2xx is an error, matching the
+// pod delete semantics.
+func (c *Client) deleteStrict(ctx context.Context, path string) error {
 	req, err := c.NewRequest(ctx, http.MethodDelete, path, nil)
 	if err != nil {
 		return errors.Wrap(err, errCreateRequest)
@@ -243,8 +279,11 @@ func (c *Client) deleteTolerant(ctx context.Context, path string) error {
 		_ = resp.Body.Close()
 	}()
 
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
+		return nil
+	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		stdlog.Printf("RunPod DELETE %s returned status %d; treating as success; body=%s", path, resp.StatusCode, readErrorBody(resp.Body))
+		return errors.Errorf("RunPod DELETE %s returned status %d: %s", path, resp.StatusCode, readErrorBody(resp.Body))
 	}
 
 	return nil

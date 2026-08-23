@@ -10,6 +10,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
 
 	v1alpha1 "github.com/zapr-16/provider-runpod/apis/v1alpha1"
 	v1beta1 "github.com/zapr-16/provider-runpod/apis/v1beta1"
@@ -41,14 +42,38 @@ func main() {
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme: s,
 		Logger: logger,
+		// The RunPod create APIs are not idempotent: two reconcilers racing
+		// during a rolling update would provision duplicate GPU pods.
+		LeaderElection:         true,
+		LeaderElectionID:       "crossplane-leader-election-provider-runpod",
+		HealthProbeBindAddress: ":8081",
 	})
 	if err != nil {
 		logger.Error(errors.Wrap(err, errCreateManager), "manager setup failed")
 		os.Exit(1)
 	}
 
+	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
+		logger.Error(err, "cannot add health check")
+		os.Exit(1)
+	}
+	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
+		logger.Error(err, "cannot add readiness check")
+		os.Exit(1)
+	}
+
 	if err := providerconfigcontroller.SetupWithManager(mgr, zapLogger.Named("providerconfig")); err != nil {
 		logger.Error(err, "cannot set up ProviderConfig controller")
+		os.Exit(1)
+	}
+
+	if err := providerconfigcontroller.SetupClusterWithManager(mgr, zapLogger.Named("clusterproviderconfig")); err != nil {
+		logger.Error(err, "cannot set up ClusterProviderConfig controller")
+		os.Exit(1)
+	}
+
+	if err := providerconfigcontroller.SetupUsageTracking(mgr, logger.WithName("providerconfig-usage")); err != nil {
+		logger.Error(err, "cannot set up ProviderConfig usage controller")
 		os.Exit(1)
 	}
 

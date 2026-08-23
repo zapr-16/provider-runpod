@@ -11,14 +11,15 @@ CROSSPLANE_RELEASE_NAME="${CROSSPLANE_RELEASE_NAME:-crossplane}"
 CROSSPLANE_HELM_REPO_NAME="${CROSSPLANE_HELM_REPO_NAME:-crossplane-stable}"
 CROSSPLANE_HELM_REPO_URL="${CROSSPLANE_HELM_REPO_URL:-https://charts.crossplane.io/stable}"
 CROSSPLANE_HELM_CHART="${CROSSPLANE_HELM_CHART:-crossplane-stable/crossplane}"
-CROSSPLANE_HELM_VERSION="${CROSSPLANE_HELM_VERSION:-}"
+CROSSPLANE_HELM_VERSION="${CROSSPLANE_HELM_VERSION:-2.4.0}"
 PROVIDER_IMAGE="${PROVIDER_IMAGE:-provider-runpod:local}"
 WAIT_TIMEOUT="${WAIT_TIMEOUT:-300s}"
 PROVIDER_GOARCH="${PROVIDER_GOARCH:-}"
 
 require_cmd() {
-  if ! command -v "$1" >/dev/null 2>&1; then
-    echo "missing required command: $1" >&2
+  local cmd="$1"
+  if ! command -v "${cmd}" >/dev/null 2>&1; then
+    echo "missing required command: ${cmd}" >&2
     exit 1
   fi
 }

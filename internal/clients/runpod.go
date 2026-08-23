@@ -5,12 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	stdlog "log"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
-	xpresource "github.com/crossplane/crossplane-runtime/pkg/resource"
+	xpresource "github.com/crossplane/crossplane-runtime/v2/pkg/resource"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	"github.com/pkg/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -24,7 +25,22 @@ const (
 	errCreateRequest      = "cannot create RunPod request"
 	errDoRequest          = "cannot execute RunPod request"
 	errDecodeResponse     = "cannot decode RunPod response"
+	errInvalidResourceID  = "invalid RunPod resource identifier"
 )
+
+// resourceIDPattern matches RunPod resource identifiers (pod, endpoint, and
+// template IDs). IDs are interpolated into URL paths, so anything outside
+// this alphabet (path separators, dots, query/fragment markers) must be
+// rejected: external-names are user-controlled via annotation and could
+// otherwise redirect an authenticated request to a different API object.
+var resourceIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
+func validateResourceID(id string) error {
+	if !resourceIDPattern.MatchString(id) {
+		return errors.Errorf("%s: %q", errInvalidResourceID, id)
+	}
+	return nil
+}
 
 // Client wraps an HTTP client configured for the RunPod REST API.
 type Client struct {
@@ -68,13 +84,30 @@ type PodResponse struct {
 	} `json:"machine"`
 }
 
+// Option configures a Client.
+type Option func(*Client)
+
+// WithBaseURL overrides the RunPod REST base URL.
+func WithBaseURL(u string) Option {
+	return func(c *Client) { c.baseURL = u }
+}
+
+// WithHTTPClient overrides the underlying HTTP client.
+func WithHTTPClient(hc *http.Client) Option {
+	return func(c *Client) { c.httpClient = hc }
+}
+
 // NewClient returns a RunPod client with the default REST base URL.
-func NewClient(apiKey string) *Client {
-	return &Client{
+func NewClient(apiKey string, opts ...Option) *Client {
+	c := &Client{
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 		baseURL:    defaultBaseURL,
 		apiKey:     apiKey,
 	}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
 }
 
 // NewRequest creates an authenticated RunPod API request.
@@ -94,9 +127,10 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 	return c.httpClient.Do(req)
 }
 
-// ClientFromProviderConfig builds an authenticated RunPod client from a ProviderConfig.
-func ClientFromProviderConfig(ctx context.Context, kube client.Client, pc *v1beta1.ProviderConfig) (*Client, error) {
-	apiKey, err := xpresource.ExtractSecret(ctx, kube, pc.Spec.Credentials)
+// ClientFromCredentials builds an authenticated RunPod client from the
+// common credential selectors carried by either ProviderConfig kind.
+func ClientFromCredentials(ctx context.Context, kube client.Client, creds xpv2.CommonCredentialSelectors) (*Client, error) {
+	apiKey, err := xpresource.ExtractSecret(ctx, kube, creds)
 	if err != nil {
 		return nil, errors.Wrap(err, errExtractCredentials)
 	}
@@ -108,8 +142,27 @@ func ClientFromProviderConfig(ctx context.Context, kube client.Client, pc *v1bet
 	return NewClient(string(apiKey)), nil
 }
 
-// GetPod retrieves a pod observation payload from the RunPod API.
+// ClientFromProviderConfig builds an authenticated RunPod client from a
+// namespaced ProviderConfig.
+func ClientFromProviderConfig(ctx context.Context, kube client.Client, pc *v1beta1.ProviderConfig) (*Client, error) {
+	return ClientFromCredentials(ctx, kube, pc.Spec.Credentials)
+}
+
+// ClientFromClusterProviderConfig builds an authenticated RunPod client from
+// a cluster-scoped ClusterProviderConfig.
+func ClientFromClusterProviderConfig(ctx context.Context, kube client.Client, pc *v1beta1.ClusterProviderConfig) (*Client, error) {
+	return ClientFromCredentials(ctx, kube, pc.Spec.Credentials)
+}
+
+// GetPod retrieves a pod observation payload from the RunPod API. Only a
+// 404 means "not found": any other non-2xx (429, 401, 5xx, ...) is an error,
+// because reporting a transient failure as absence would make the reconciler
+// create a duplicate pod and orphan the running, still-billing original.
 func (c *Client) GetPod(ctx context.Context, podID string) (*PodResponse, bool, error) {
+	if err := validateResourceID(podID); err != nil {
+		return nil, false, err
+	}
+
 	req, err := c.NewRequest(ctx, http.MethodGet, "/pods/"+podID+"?includeMachine=true", nil)
 	if err != nil {
 		return nil, false, errors.Wrap(err, errCreateRequest)
@@ -123,9 +176,11 @@ func (c *Client) GetPod(ctx context.Context, podID string) (*PodResponse, bool, 
 		_ = resp.Body.Close()
 	}()
 
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		stdlog.Printf("RunPod GET /pods/%s returned status %d; treating as not found; body=%s", podID, resp.StatusCode, readErrorBody(resp.Body))
+	if resp.StatusCode == http.StatusNotFound {
 		return nil, false, nil
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, false, errors.Errorf("RunPod GET /pods/%s returned status %d: %s", podID, resp.StatusCode, readErrorBody(resp.Body))
 	}
 
 	var out PodResponse
@@ -168,8 +223,14 @@ func (c *Client) CreatePod(ctx context.Context, payload CreatePodRequest) (strin
 	return out.ID, nil
 }
 
-// DeletePod deletes a RunPod pod and tolerates undocumented already-gone semantics.
+// DeletePod deletes a RunPod pod. Already-gone responses (404/410) count as
+// success; any other non-2xx is returned as an error so the reconciler
+// retries instead of dropping the finalizer while the pod keeps billing.
 func (c *Client) DeletePod(ctx context.Context, podID string) error {
+	if err := validateResourceID(podID); err != nil {
+		return err
+	}
+
 	req, err := c.NewRequest(ctx, http.MethodDelete, "/pods/"+podID, nil)
 	if err != nil {
 		return errors.Wrap(err, errCreateRequest)
@@ -183,8 +244,11 @@ func (c *Client) DeletePod(ctx context.Context, podID string) error {
 		_ = resp.Body.Close()
 	}()
 
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
+		return nil
+	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		stdlog.Printf("RunPod DELETE /pods/%s returned status %d; treating as success; body=%s", podID, resp.StatusCode, readErrorBody(resp.Body))
+		return errors.Errorf("RunPod DELETE /pods/%s returned status %d: %s", podID, resp.StatusCode, readErrorBody(resp.Body))
 	}
 
 	return nil
