@@ -28,7 +28,9 @@ if kind get clusters | grep -qx "${KIND_CLUSTER_NAME}"; then
   echo "==> Removing local provider deployment"
   kubectl delete -f "${ROOT_DIR}/deploy/local/provider.yaml" --ignore-not-found || true
   kubectl delete -f "${ROOT_DIR}/deploy/local/rbac.yaml" --ignore-not-found || true
-  kubectl delete providerconfig.runpod.crossplane.io/default --ignore-not-found || true
+  kubectl delete clusterproviderconfig.runpod.crossplane.io/default --ignore-not-found || true
+  # Pre-v2 clusters used the (then cluster-scoped) providerconfig kind.
+  kubectl delete providerconfig.runpod.crossplane.io/default --ignore-not-found >/dev/null 2>&1 || true
   kubectl delete secret/runpod-api-key -n "${CROSSPLANE_NAMESPACE}" --ignore-not-found || true
 fi
 

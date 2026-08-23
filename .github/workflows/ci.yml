@@ -9,39 +9,74 @@ on:
 permissions:
   contents: read
 
+# Third-party actions are pinned to commit SHAs so a compromised or moved
+# tag cannot inject code into this pipeline.
 jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           # Pin to go.mod: "stable" drifted to Go 1.27, and golangci-lint
           # v2.11.4 (built with Go 1.26) panics type-checking 1.27 files.
           go-version-file: go.mod
 
       - name: Run golangci-lint
-        # v7+ is required for golangci-lint v2.x.
-        uses: golangci/golangci-lint-action@v7
+        # v7+ is required for golangci-lint v2.x; pinned to the v9 line.
+        uses: golangci/golangci-lint-action@db9de0fc1a667e1a49d2291a1a042dff081d78f6 # v9
         with:
           # v2.3.0 was built with Go 1.24 — fails to load configs that
-          # target Go 1.26+ (this project's go.mod is on 1.26.2).
+          # target Go 1.26+ (this project's go.mod is on 1.26.x).
           version: v2.11.4
+
+  generate-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+
+      - name: Verify generated code is up to date
+        run: |
+          make generate
+          git diff --exit-code || (echo "generated code is out of date; run 'make generate' and commit the result" && exit 1)
+
+  vulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+
+      - name: Run govulncheck
+        # No @version: installing from inside the module locks the tool to
+        # the version pinned in go.mod/go.sum (via tools/tools.go), so the
+        # resolution is reproducible and lockfile-enforced.
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck
+          govulncheck ./...
 
   test:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          # Pin to go.mod: "stable" drifted to Go 1.27, and golangci-lint
-          # v2.11.4 (built with Go 1.26) panics type-checking 1.27 files.
           go-version-file: go.mod
 
       - name: Run tests
@@ -53,13 +88,11 @@ jobs:
       - test
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          # Pin to go.mod: "stable" drifted to Go 1.27, and golangci-lint
-          # v2.11.4 (built with Go 1.26) panics type-checking 1.27 files.
           go-version-file: go.mod
 
       - name: Build provider binary

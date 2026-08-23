@@ -1,8 +1,19 @@
 package v1alpha1
 
 import (
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
+	"reflect"
+
+	resource "github.com/crossplane/crossplane-runtime/v2/pkg/resource"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+)
+
+// interface checks to ensure Pod conforms to the crossplane-runtime v2
+// namespaced managed-resource interfaces.
+var (
+	_ resource.ModernManaged = &Pod{}
+	_ resource.ManagedList   = &PodList{}
 )
 
 // CloudType identifies the RunPod cloud class used for scheduling.
@@ -125,18 +136,23 @@ type PodObservation struct {
 	// Derived readiness flag, true when a connection endpoint is resolvable:
 	// either an HTTP proxy URL or a public IP with port mappings.
 	NetworkingReady bool `json:"networkingReady"`
+
+	// True when mutable-looking spec fields (env, ports) diverge from the
+	// running pod. RunPod pods are immutable, so drift cannot be reconciled
+	// in place; it is surfaced here instead of blocking the Synced condition.
+	DriftDetected bool `json:"driftDetected,omitempty"`
 }
 
 // PodSpec defines the desired state of a RunPod Pod resource.
 type PodSpec struct {
-	xpv1.ResourceSpec `json:",inline"`
-	ForProvider       PodParameters `json:"forProvider"`
+	xpv2.ManagedResourceSpec `json:",inline"`
+	ForProvider              PodParameters `json:"forProvider"`
 }
 
 // PodStatus reflects the observed state of a RunPod Pod resource.
 type PodStatus struct {
-	xpv1.ResourceStatus `json:",inline"`
-	AtProvider          PodObservation `json:"atProvider,omitempty"`
+	xpv2.ManagedResourceStatus `json:",inline"`
+	AtProvider                 PodObservation `json:"atProvider,omitempty"`
 }
 
 // A Pod is a managed RunPod GPU workload.
@@ -160,61 +176,58 @@ type PodList struct {
 }
 
 // SetConditions sets the supplied conditions on the Pod status.
-func (p *Pod) SetConditions(c ...xpv1.Condition) {
+func (p *Pod) SetConditions(c ...xpv2.Condition) {
 	p.Status.SetConditions(c...)
 }
 
 // GetCondition returns the condition of the supplied type if present.
-func (p *Pod) GetCondition(ct xpv1.ConditionType) xpv1.Condition {
+func (p *Pod) GetCondition(ct xpv2.ConditionType) xpv2.Condition {
 	return p.Status.GetCondition(ct)
 }
 
 // SetProviderConfigReference sets the provider config reference for this Pod.
-func (p *Pod) SetProviderConfigReference(r *xpv1.Reference) {
+func (p *Pod) SetProviderConfigReference(r *xpv2.ProviderConfigReference) {
 	p.Spec.ProviderConfigReference = r
 }
 
 // GetProviderConfigReference gets the provider config reference for this Pod.
-func (p *Pod) GetProviderConfigReference() *xpv1.Reference {
+func (p *Pod) GetProviderConfigReference() *xpv2.ProviderConfigReference {
 	return p.Spec.ProviderConfigReference
 }
 
 // SetWriteConnectionSecretToReference sets the connection secret reference.
-func (p *Pod) SetWriteConnectionSecretToReference(r *xpv1.SecretReference) {
+func (p *Pod) SetWriteConnectionSecretToReference(r *xpv2.LocalSecretReference) {
 	p.Spec.WriteConnectionSecretToReference = r
 }
 
 // GetWriteConnectionSecretToReference gets the connection secret reference.
-func (p *Pod) GetWriteConnectionSecretToReference() *xpv1.SecretReference {
+func (p *Pod) GetWriteConnectionSecretToReference() *xpv2.LocalSecretReference {
 	return p.Spec.WriteConnectionSecretToReference
 }
 
-// SetPublishConnectionDetailsTo sets the publish-connection-details target.
-func (p *Pod) SetPublishConnectionDetailsTo(r *xpv1.PublishConnectionDetailsTo) {
-	p.Spec.PublishConnectionDetailsTo = r
-}
-
-// GetPublishConnectionDetailsTo gets the publish-connection-details target.
-func (p *Pod) GetPublishConnectionDetailsTo() *xpv1.PublishConnectionDetailsTo {
-	return p.Spec.PublishConnectionDetailsTo
-}
-
 // SetManagementPolicies sets management policies for this Pod.
-func (p *Pod) SetManagementPolicies(mp xpv1.ManagementPolicies) {
+func (p *Pod) SetManagementPolicies(mp xpv2.ManagementPolicies) {
 	p.Spec.ManagementPolicies = mp
 }
 
 // GetManagementPolicies gets management policies for this Pod.
-func (p *Pod) GetManagementPolicies() xpv1.ManagementPolicies {
+func (p *Pod) GetManagementPolicies() xpv2.ManagementPolicies {
 	return p.Spec.ManagementPolicies
 }
 
-// SetDeletionPolicy sets the deletion policy for this Pod.
-func (p *Pod) SetDeletionPolicy(dp xpv1.DeletionPolicy) {
-	p.Spec.DeletionPolicy = dp
+// GetItems returns the list items as the runtime's Managed interface.
+func (l *PodList) GetItems() []resource.Managed {
+	items := make([]resource.Managed, len(l.Items))
+	for i := range l.Items {
+		items[i] = &l.Items[i]
+	}
+	return items
 }
 
-// GetDeletionPolicy gets the deletion policy for this Pod.
-func (p *Pod) GetDeletionPolicy() xpv1.DeletionPolicy {
-	return p.Spec.DeletionPolicy
-}
+// Pod type metadata.
+var (
+	PodKind             = reflect.TypeOf(Pod{}).Name()
+	PodGroupKind        = schema.GroupKind{Group: Group, Kind: PodKind}.String()
+	PodKindAPIVersion   = PodKind + "." + SchemeGroupVersion.String()
+	PodGroupVersionKind = SchemeGroupVersion.WithKind(PodKind)
+)

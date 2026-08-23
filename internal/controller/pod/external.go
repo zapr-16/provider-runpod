@@ -3,15 +3,16 @@ package pod
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
-	"github.com/crossplane/crossplane-runtime/pkg/meta"
-	managed "github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
-	xpresource "github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
+	managed "github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
+	xpresource "github.com/crossplane/crossplane-runtime/v2/pkg/resource"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	"github.com/go-logr/logr"
 	"github.com/pkg/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -25,11 +26,43 @@ const (
 	errParseStartedAt = "cannot parse pod lastStartedAt timestamp"
 	errCreatePod      = "cannot create pod via RunPod API"
 	errDeletePod      = "cannot delete pod via RunPod API"
+
+	// logKeyExternalName is the structured-logging key used to annotate log
+	// lines with the RunPod external-name (pod ID).
+	logKeyExternalName = "external-name"
 )
 
 type external struct {
 	client *runpodclient.Client
 	log    logr.Logger
+	// probeHTTP reports whether an HTTP(S) endpoint is answering. The
+	// RunPod proxy URL resolves from the pod ID alone and returns 502
+	// until the workload listens, so existence of the URL is not enough
+	// to mark the pod Available.
+	probeHTTP func(ctx context.Context, url string) bool
+}
+
+// proxyProbeClient deliberately uses a shorter timeout than the API client:
+// the probe runs inside Observe on every poll and a hung proxy should not
+// stall reconciliation.
+var proxyProbeClient = &http.Client{Timeout: 5 * time.Second}
+
+func defaultHTTPProbe(ctx context.Context, url string) bool {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return false
+	}
+	resp, err := proxyProbeClient.Do(req)
+	if err != nil {
+		return false
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+	// Anything below 500 (including 404/401 from the workload itself)
+	// proves the container is listening; 502/503/504 come from the proxy
+	// while the backend is still down.
+	return resp.StatusCode < http.StatusInternalServerError
 }
 
 func (e *external) Observe(ctx context.Context, mg xpresource.Managed) (managed.ExternalObservation, error) {
@@ -48,12 +81,15 @@ func (e *external) Observe(ctx context.Context, mg xpresource.Managed) (managed.
 		return managed.ExternalObservation{}, errors.Wrap(err, errGetPod)
 	}
 	if !found {
-		e.log.Info("Pod not found in RunPod API", "external-name", externalName)
+		e.log.Info("Pod not found in RunPod API", logKeyExternalName, externalName)
 		return managed.ExternalObservation{ResourceExists: false}, nil
 	}
 
 	endpoint, resolvedPort := resolveConnectionTarget(pod.Spec.ForProvider.Ports, response.ID, response.PublicIP, response.PortMappings)
 	networkingReady := endpoint != "" || (response.PublicIP != "" && response.PortMappings != nil)
+	if endpoint != "" && response.DesiredStatus == "RUNNING" && e.probeHTTP != nil {
+		networkingReady = e.probeHTTP(ctx, endpoint)
+	}
 	gpuDisplayName := response.Machine.GPUDisplayName
 	if gpuDisplayName == "" {
 		gpuDisplayName = response.GPU.DisplayName
@@ -88,32 +124,42 @@ func (e *external) Observe(ctx context.Context, mg xpresource.Managed) (managed.
 	switch response.DesiredStatus {
 	case "RUNNING":
 		if networkingReady {
-			pod.SetConditions(xpv1.Available())
+			pod.SetConditions(xpv2.Available())
 		} else {
-			pod.SetConditions(xpv1.Creating())
+			pod.SetConditions(xpv2.Creating())
 		}
 	case "EXITED", "TERMINATED":
-		pod.SetConditions(xpv1.Unavailable())
+		pod.SetConditions(xpv2.Unavailable())
 		// Spot reclaim / OOM / manual console delete all leave the pod
 		// stuck here forever unless we explicitly tell Crossplane the
 		// resource is gone — which causes the next reconcile to call
 		// Create() and provision a fresh pod with the same spec.
 		// Opt-in via spec.forProvider.recreateOnTerminate.
 		if pod.Spec.ForProvider.RecreateOnTerminate != nil && *pod.Spec.ForProvider.RecreateOnTerminate {
-			e.log.Info("Pod terminated; clearing external-name to trigger auto-recreate",
-				"external-name", externalName, "status", response.DesiredStatus)
+			// Terminated pods retain their disk and keep billing storage,
+			// and the external-name is the only record of the old ID — so
+			// the old pod must be deleted before the ID is dropped. On
+			// failure the ID is kept and the next reconcile retries.
+			if err := e.client.DeletePod(ctx, externalName); err != nil {
+				return managed.ExternalObservation{}, errors.Wrap(err, errDeletePod)
+			}
+			e.log.Info("Pod terminated; deleted old pod and clearing external-name to trigger auto-recreate",
+				logKeyExternalName, externalName, "status", response.DesiredStatus)
 			if anns := pod.GetAnnotations(); anns != nil {
 				delete(anns, meta.AnnotationKeyExternalName)
 			}
 			return managed.ExternalObservation{ResourceExists: false}, nil
 		}
 	default:
-		e.log.Info("RunPod returned unknown desiredStatus", "status", response.DesiredStatus, "external-name", externalName)
-		pod.SetConditions(xpv1.Unavailable())
+		e.log.Info("RunPod returned unknown desiredStatus", "status", response.DesiredStatus, logKeyExternalName, externalName)
+		pod.SetConditions(xpv2.Unavailable())
 	}
 
-	envDrift := hasEnvDrift(pod.Spec.ForProvider.Env, response.Env)
-	portsDrift := hasPortsDrift(pod.Spec.ForProvider.Ports, response.Ports)
+	// RunPod pods are immutable, so drift can never be reconciled in place:
+	// reporting not-up-to-date would make the reconciler call the no-op
+	// Update() on every poll forever. Surface drift via status instead.
+	pod.Status.AtProvider.DriftDetected = hasEnvDrift(pod.Spec.ForProvider.Env, response.Env) ||
+		hasPortsDrift(pod.Spec.ForProvider.Ports, response.Ports)
 
 	connectionDetails := managed.ConnectionDetails{
 		"podId": []byte(externalName),
@@ -131,7 +177,7 @@ func (e *external) Observe(ctx context.Context, mg xpresource.Managed) (managed.
 	// would never persist.
 	return managed.ExternalObservation{
 		ResourceExists:    true,
-		ResourceUpToDate:  !envDrift && !portsDrift,
+		ResourceUpToDate:  true,
 		ConnectionDetails: connectionDetails,
 	}, nil
 }
@@ -176,6 +222,9 @@ func (e *external) Create(ctx context.Context, mg xpresource.Managed) (managed.E
 }
 
 func (e *external) Update(_ context.Context, _ xpresource.Managed) (managed.ExternalUpdate, error) {
+	// Pods are immutable in the RunPod API; Observe always reports
+	// up-to-date and surfaces drift via status.atProvider.driftDetected,
+	// so this should never be called.
 	e.log.V(1).Info("Pod is immutable; Update is a no-op")
 	return managed.ExternalUpdate{}, nil
 }
@@ -202,8 +251,11 @@ func (e *external) Disconnect(_ context.Context) error {
 	return nil
 }
 
+// hasEnvDrift reports whether declared env vars diverge from the running
+// pod. Nil and empty both mean "unmanaged": an empty value could never be
+// pushed to the API anyway (payloads use omitempty).
 func hasEnvDrift(desired []v1alpha1.EnvVar, observed map[string]string) bool {
-	if desired == nil {
+	if len(desired) == 0 {
 		return false
 	}
 
@@ -216,7 +268,7 @@ func hasEnvDrift(desired []v1alpha1.EnvVar, observed map[string]string) bool {
 }
 
 func hasPortsDrift(desired []v1alpha1.Port, observed []string) bool {
-	if desired == nil {
+	if len(desired) == 0 {
 		return false
 	}
 

@@ -11,6 +11,9 @@ metadata:
   namespace: default
 spec:
   providerConfigRef:
+    # kind is required by the CRD schema; the whole-object default only
+    # applies when providerConfigRef is omitted entirely.
+    kind: ClusterProviderConfig
     name: default
   forProvider:
     imageName: runpod/worker-v1-vllm:v2.25.2
@@ -38,4 +41,3 @@ spec:
     scalerValue: 4
   writeConnectionSecretToRef:
     name: vllm-vl-conn
-    namespace: default

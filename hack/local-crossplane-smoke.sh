@@ -82,6 +82,9 @@ metadata:
     app.kubernetes.io/name: provider-runpod-local-smoke
 spec:
   providerConfigRef:
+    # kind is required by the CRD schema; the whole-object default only
+    # applies when providerConfigRef is omitted entirely.
+    kind: ClusterProviderConfig
     name: ${PROVIDER_CONFIG_NAME}
   forProvider:
     imageName: ${RUNPOD_IMAGE_NAME}
@@ -121,7 +124,6 @@ attempt_smoke() {
   local external_name=""
   local desired_status=""
   local public_ip=""
-  local port_mapping=""
   local synced_message=""
 
   wait_for_delete
@@ -151,18 +153,26 @@ attempt_smoke() {
   while [[ "${SECONDS}" -lt "${deadline}" ]]; do
     desired_status="$(kubectl get "pod.runpod.crossplane.io/${LOCAL_TEST_POD_NAME}" -n "${LOCAL_TEST_NAMESPACE}" -o jsonpath='{.status.atProvider.desiredStatus}' 2>/dev/null || true)"
     public_ip="$(kubectl get "pod.runpod.crossplane.io/${LOCAL_TEST_POD_NAME}" -n "${LOCAL_TEST_NAMESPACE}" -o jsonpath='{.status.atProvider.publicIp}' 2>/dev/null || true)"
-    port_mapping="$(kubectl get "pod.runpod.crossplane.io/${LOCAL_TEST_POD_NAME}" -n "${LOCAL_TEST_NAMESPACE}" -o jsonpath='{.status.atProvider.portMappings.8888\/http}' 2>/dev/null || true)"
+    # networkingReady is the authoritative signal: the controller sets it
+    # only after its HTTP probe of the proxy endpoint succeeds, so it also
+    # covers COMMUNITY/SECURE pods that never receive a public IP.
+    networking_ready="$(kubectl get "pod.runpod.crossplane.io/${LOCAL_TEST_POD_NAME}" -n "${LOCAL_TEST_NAMESPACE}" -o jsonpath='{.status.atProvider.networkingReady}' 2>/dev/null || true)"
+    runtime_endpoint="$(kubectl get "pod.runpod.crossplane.io/${LOCAL_TEST_POD_NAME}" -n "${LOCAL_TEST_NAMESPACE}" -o jsonpath='{.status.atProvider.runtimeEndpoint}' 2>/dev/null || true)"
     synced_message="$(kubectl get "pod.runpod.crossplane.io/${LOCAL_TEST_POD_NAME}" -n "${LOCAL_TEST_NAMESPACE}" -o jsonpath='{range .status.conditions[?(@.type=="Synced")]}{.message}{end}' 2>/dev/null || true)"
 
-    if [[ "${desired_status}" == "RUNNING" && -n "${public_ip}" && -n "${port_mapping}" ]]; then
+    if [[ "${desired_status}" == "RUNNING" && "${networking_ready}" == "true" ]]; then
       echo "==> Crossplane observed pod successfully"
       echo "external name: ${external_name}"
       echo "cloud type: ${cloud_type}"
       echo "gpu type id: ${gpu_type_id}"
       echo "support public ip: ${support_public_ip}"
       echo "desired status: ${desired_status}"
-      echo "public ip: ${public_ip}"
-      echo "mapped http port: ${port_mapping}"
+      echo "public ip: ${public_ip:-<none>}"
+      echo "runtime endpoint: ${runtime_endpoint:-<none>}"
+      if [[ -n "${runtime_endpoint}" ]]; then
+        echo "==> Probing runtime endpoint through the RunPod proxy"
+        curl -fsS -o /dev/null -w "proxy HTTP status: %{http_code}\n" "${runtime_endpoint}" || true
+      fi
       return 0
     fi
 
@@ -181,11 +191,18 @@ attempt_smoke() {
 }
 
 echo "==> Creating RunPod API key secret"
-kubectl create secret generic "${SECRET_NAME}" \
-  --namespace "${CROSSPLANE_NAMESPACE}" \
-  --from-literal=apiKey="${RUNPOD_API_KEY}" \
-  --dry-run=client \
-  -o yaml | kubectl apply -f -
+# The key is fed to kubectl via stdin (not --from-literal) so it never
+# appears on a command line visible in `ps` output.
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${SECRET_NAME}
+  namespace: ${CROSSPLANE_NAMESPACE}
+type: Opaque
+stringData:
+  apiKey: "${RUNPOD_API_KEY}"
+EOF
 
 echo "==> Applying ProviderConfig and sample Pod"
 kubectl apply -f "${ROOT_DIR}/examples/providerconfig.yaml"

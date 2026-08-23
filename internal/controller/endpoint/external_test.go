@@ -8,11 +8,10 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"unsafe"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
-	"github.com/crossplane/crossplane-runtime/pkg/meta"
-	managed "github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
+	managed "github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -91,23 +90,59 @@ func TestObserve(t *testing.T) {
 	}
 
 	tests := map[string]struct {
-		externalName string
-		spec         func() v1alpha1.EndpointParameters
-		statusCode   int
-		response     *runpodclient.EndpointResponse
-		wantCalls    int
-		want         want
+		externalName       string
+		spec               func() v1alpha1.EndpointParameters
+		statusCode         int
+		templateStatusCode int
+		response           *runpodclient.EndpointResponse
+		wantCalls          int
+		wantErr            bool
+		want               want
 	}{
 		"EmptyExternalName": {
 			spec: matchingSpec,
 			want: want{exists: false},
 		},
-		"Non2xxTreatsEndpointAsMissing": {
+		"NotFoundTreatsEndpointAsMissing": {
 			externalName: "ep-123",
 			spec:         matchingSpec,
 			statusCode:   http.StatusNotFound,
 			wantCalls:    1,
 			want:         want{exists: false},
+		},
+		"ServerErrorReturnsError": {
+			// A transient 5xx must NOT look like a missing endpoint: the
+			// reconciler would create a duplicate endpoint+template and
+			// orphan the originals.
+			externalName: "ep-123",
+			spec:         matchingSpec,
+			statusCode:   http.StatusInternalServerError,
+			wantCalls:    1,
+			wantErr:      true,
+		},
+		"RateLimitedReturnsError": {
+			externalName: "ep-123",
+			spec:         matchingSpec,
+			statusCode:   http.StatusTooManyRequests,
+			wantCalls:    1,
+			wantErr:      true,
+		},
+		"InvalidExternalNameReturnsError": {
+			externalName: "ep-123/../../v1/pods/victim",
+			spec:         matchingSpec,
+			wantCalls:    0,
+			wantErr:      true,
+		},
+		"TemplateServerErrorReturnsError": {
+			// Template drift check failures must surface, not silently
+			// report the endpoint as up to date.
+			externalName:       "ep-123",
+			spec:               matchingSpec,
+			statusCode:         http.StatusOK,
+			templateStatusCode: http.StatusInternalServerError,
+			response:           readyResponse(),
+			wantCalls:          2,
+			wantErr:            true,
 		},
 		"MatchingSpecIsUpToDateAndAvailable": {
 			// Endpoint matches → template drift check adds a GET /templates call.
@@ -245,6 +280,10 @@ func TestObserve(t *testing.T) {
 						}
 					}
 				case "/templates/tpl-xyz":
+					if tc.templateStatusCode != 0 {
+						w.WriteHeader(tc.templateStatusCode)
+						return
+					}
 					if err := json.NewEncoder(w).Encode(templateResponse()); err != nil {
 						t.Fatalf("encode template response: %v", err)
 					}
@@ -264,6 +303,15 @@ func TestObserve(t *testing.T) {
 			e := &external{client: newTestClient(t, server), log: logr.Discard()}
 
 			got, err := e.Observe(context.Background(), ep)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("Observe() error = nil, want non-nil")
+				}
+				if calls != tc.wantCalls {
+					t.Fatalf("Observe() HTTP calls = %d, want %d", calls, tc.wantCalls)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("Observe() error = %v", err)
 			}
@@ -280,7 +328,7 @@ func TestObserve(t *testing.T) {
 			if got.ResourceUpToDate != tc.want.upToDate {
 				t.Fatalf("Observe() ResourceUpToDate = %v, want %v", got.ResourceUpToDate, tc.want.upToDate)
 			}
-			ready := ep.GetCondition(xpv1.TypeReady)
+			ready := ep.GetCondition(xpv2.TypeReady)
 			if ready.Status != tc.want.readyStatus {
 				t.Fatalf("Observe() Ready status = %v, want %v", ready.Status, tc.want.readyStatus)
 			}
@@ -526,6 +574,25 @@ func TestUpdate(t *testing.T) {
 		}
 	})
 
+	t.Run("InvalidExternalNameReturnsError", func(t *testing.T) {
+		var calls int
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+		}))
+		defer server.Close()
+
+		ep := &v1alpha1.Endpoint{Spec: v1alpha1.EndpointSpec{ForProvider: matchingSpec()}}
+		meta.SetExternalName(ep, "ep-123/../../v1/pods/victim")
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+		if _, err := e.Update(context.Background(), ep); err == nil {
+			t.Fatal("Update() error = nil, want non-nil")
+		}
+		if calls != 0 {
+			t.Fatalf("Update() HTTP calls = %d, want 0", calls)
+		}
+	})
+
 	t.Run("EndpointPatchFailureReturnsError", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusBadRequest)
@@ -614,6 +681,98 @@ func TestDelete(t *testing.T) {
 			t.Fatalf("Delete() HTTP calls = %d, want 0", calls)
 		}
 	})
+
+	t.Run("NotFoundDeleteIsSuccess", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer server.Close()
+
+		ep := &v1alpha1.Endpoint{
+			Status: v1alpha1.EndpointStatus{
+				AtProvider: v1alpha1.EndpointObservation{TemplateID: "tpl-xyz"},
+			},
+		}
+		meta.SetExternalName(ep, "ep-123")
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+		if _, err := e.Delete(context.Background(), ep); err != nil {
+			t.Fatalf("Delete() error = %v", err)
+		}
+	})
+
+	t.Run("EndpointDeleteServerErrorReturnsError", func(t *testing.T) {
+		// A failed endpoint DELETE must be retried, not swallowed — the
+		// endpoint would keep running and billing with the CR gone.
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer server.Close()
+
+		ep := &v1alpha1.Endpoint{
+			Status: v1alpha1.EndpointStatus{
+				AtProvider: v1alpha1.EndpointObservation{TemplateID: "tpl-xyz"},
+			},
+		}
+		meta.SetExternalName(ep, "ep-123")
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+		_, err := e.Delete(context.Background(), ep)
+		if err == nil {
+			t.Fatal("Delete() error = nil, want non-nil")
+		}
+		if !strings.Contains(err.Error(), errDeleteEndpoint) {
+			t.Fatalf("Delete() error = %q, want wrapped %q", err.Error(), errDeleteEndpoint)
+		}
+	})
+
+	t.Run("TemplateDeleteFailureIsTolerated", func(t *testing.T) {
+		// A leaked template costs nothing; endpoint deletion must not be
+		// blocked on template cleanup.
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, "/templates/") {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		}))
+		defer server.Close()
+
+		ep := &v1alpha1.Endpoint{
+			Status: v1alpha1.EndpointStatus{
+				AtProvider: v1alpha1.EndpointObservation{TemplateID: "tpl-xyz"},
+			},
+		}
+		meta.SetExternalName(ep, "ep-123")
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+		if _, err := e.Delete(context.Background(), ep); err != nil {
+			t.Fatalf("Delete() error = %v", err)
+		}
+	})
+
+	t.Run("InvalidExternalNameReturnsError", func(t *testing.T) {
+		var calls int
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+		}))
+		defer server.Close()
+
+		ep := &v1alpha1.Endpoint{
+			Status: v1alpha1.EndpointStatus{
+				AtProvider: v1alpha1.EndpointObservation{TemplateID: "tpl-xyz"},
+			},
+		}
+		meta.SetExternalName(ep, "ep-123/../../v1/pods/victim")
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+		if _, err := e.Delete(context.Background(), ep); err == nil {
+			t.Fatal("Delete() error = nil, want non-nil")
+		}
+		if calls != 0 {
+			t.Fatalf("Delete() HTTP calls = %d, want 0", calls)
+		}
+	})
 }
 
 func TestHasEndpointDrift(t *testing.T) {
@@ -651,6 +810,12 @@ func TestHasEndpointDrift(t *testing.T) {
 				*s = v1alpha1.EndpointParameters{ImageName: s.ImageName}
 			},
 			want: false,
+		},
+		"EmptyGPUTypeIDsDoNotDrift": {
+			// Empty and nil both mean "unmanaged": the PATCH payload uses
+			// omitempty, so an empty list could never be reconciled anyway.
+			mutate: func(s *v1alpha1.EndpointParameters) { s.GPUTypeIDs = []string{} },
+			want:   false,
 		},
 	}
 
@@ -695,6 +860,10 @@ func TestHasTemplateDrift(t *testing.T) {
 			},
 			want: false,
 		},
+		"EmptyEnvDoesNotDrift": {
+			mutate: func(s *v1alpha1.EndpointParameters) { s.Env = []v1alpha1.EnvVar{} },
+			want:   false,
+		},
 	}
 
 	for name, tc := range tests {
@@ -711,19 +880,12 @@ func TestHasTemplateDrift(t *testing.T) {
 func newTestClient(t *testing.T, server *httptest.Server) *runpodclient.Client {
 	t.Helper()
 
-	c := runpodclient.NewClient("test-key")
-	setUnexportedField(t, c, "baseURL", server.URL)
-	setUnexportedField(t, c, "httpClient", server.Client())
-	return c
+	return runpodclient.NewClient("test-key",
+		runpodclient.WithBaseURL(server.URL),
+		runpodclient.WithHTTPClient(server.Client()),
+	)
 }
 
 func ptrInt32(v int32) *int32 { return &v }
 
 func ptrBool(b bool) *bool { return &b }
-
-func setUnexportedField(t *testing.T, target any, name string, value any) {
-	t.Helper()
-
-	v := reflect.ValueOf(target).Elem().FieldByName(name)
-	reflect.NewAt(v.Type(), unsafe.Pointer(v.UnsafeAddr())).Elem().Set(reflect.ValueOf(value))
-}

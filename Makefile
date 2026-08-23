@@ -10,7 +10,9 @@ GOLANGCI_LINT := $(GOBIN)/golangci-lint
 
 XPKG_REG  ?= ghcr.io/zapr-16
 XPKG_NAME ?= provider-runpod
-XPKG_TAG  ?= v0.1.0
+# Keep in sync with the controller image tag in package/crossplane.yaml and
+# the install command in README.md.
+XPKG_TAG  ?= v0.4.0
 XPKG_FILE := $(XPKG_NAME)-$(XPKG_TAG).xpkg
 
 help: ## Print available targets

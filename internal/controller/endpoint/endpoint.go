@@ -3,12 +3,11 @@ package endpoint
 import (
 	"context"
 
-	"github.com/crossplane/crossplane-runtime/pkg/logging"
-	managed "github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
-	xpresource "github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
+	managed "github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
+	xpresource "github.com/crossplane/crossplane-runtime/v2/pkg/resource"
 	"github.com/go-logr/logr"
 	"github.com/pkg/errors"
-	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -20,13 +19,13 @@ import (
 const (
 	errNotEndpoint           = "managed resource is not an Endpoint"
 	errMissingProviderConfig = "endpoint is missing providerConfigRef"
-	errGetProviderConfig     = "cannot get ProviderConfig"
-	errCreateClient          = "cannot create RunPod client from ProviderConfig"
+	errTrackUsage            = "cannot track ProviderConfigUsage"
 )
 
 type connector struct {
-	kube client.Client
-	log  logr.Logger
+	kube  client.Client
+	usage *xpresource.ProviderConfigUsageTracker
+	log   logr.Logger
 }
 
 func (c *connector) Connect(ctx context.Context, mg xpresource.Managed) (managed.ExternalClient, error) {
@@ -40,14 +39,17 @@ func (c *connector) Connect(ctx context.Context, mg xpresource.Managed) (managed
 		return nil, errors.New(errMissingProviderConfig)
 	}
 
-	pc := &v1beta1.ProviderConfig{}
-	if err := c.kube.Get(ctx, types.NamespacedName{Name: ref.Name}, pc); err != nil {
-		return nil, errors.Wrap(err, errGetProviderConfig)
+	runpodclient.NormalizeProviderConfigRefKind(ref)
+
+	// Record the usage so Crossplane's in-use protection blocks deletion
+	// of the ProviderConfig while this Endpoint still needs it.
+	if err := c.usage.Track(ctx, ep); err != nil {
+		return nil, errors.Wrap(err, errTrackUsage)
 	}
 
-	rc, err := runpodclient.ClientFromProviderConfig(ctx, c.kube, pc)
+	rc, err := runpodclient.ClientForProviderConfigRef(ctx, c.kube, ep.GetNamespace(), *ref)
 	if err != nil {
-		return nil, errors.Wrap(err, errCreateClient)
+		return nil, err
 	}
 
 	return &external{
@@ -62,9 +64,10 @@ func Setup(mgr ctrl.Manager, log logr.Logger) error {
 	r := managed.NewReconciler(
 		mgr,
 		name,
-		managed.WithExternalConnecter(&connector{
-			kube: mgr.GetClient(),
-			log:  log,
+		managed.WithExternalConnector(&connector{
+			kube:  mgr.GetClient(),
+			usage: xpresource.NewProviderConfigUsageTracker(mgr.GetClient(), &v1beta1.ProviderConfigUsage{}),
+			log:   log,
 		}),
 		managed.WithLogger(logging.NewLogrLogger(log)),
 	)

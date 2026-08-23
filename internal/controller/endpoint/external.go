@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 
-	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
-	"github.com/crossplane/crossplane-runtime/pkg/meta"
-	managed "github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
-	xpresource "github.com/crossplane/crossplane-runtime/pkg/resource"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
+	managed "github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
+	xpresource "github.com/crossplane/crossplane-runtime/v2/pkg/resource"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	"github.com/go-logr/logr"
 	"github.com/pkg/errors"
 
@@ -67,7 +67,7 @@ func (e *external) Observe(ctx context.Context, mg xpresource.Managed) (managed.
 
 	// A serverless endpoint is ready as soon as it exists: zero workers is
 	// the normal scale-to-zero state, and RunPod spins workers up on demand.
-	ep.SetConditions(xpv1.Available())
+	ep.SetConditions(xpv2.Available())
 
 	upToDate := !hasEndpointDrift(ep.Spec.ForProvider, response)
 	if upToDate && response.TemplateID != "" {
@@ -110,7 +110,8 @@ func (e *external) Create(ctx context.Context, mg xpresource.Managed) (managed.E
 	endpointID, err := e.client.CreateEndpoint(ctx, buildCreateEndpointRequest(&name, templateID, ep.Spec.ForProvider))
 	if err != nil {
 		// Best-effort cleanup so a failed endpoint create does not leak the
-		// template we just made; DeleteTemplate tolerates failures itself.
+		// template we just made; a leaked template costs nothing, so a
+		// cleanup failure is logged rather than returned.
 		if derr := e.client.DeleteTemplate(ctx, templateID); derr != nil {
 			e.log.Info("could not clean up template after failed endpoint create", "template-id", templateID, "error", derr)
 		}
@@ -206,8 +207,9 @@ func (e *external) Delete(ctx context.Context, mg xpresource.Managed) (managed.E
 	}
 
 	if templateID != "" {
-		// Tolerant like DeleteEndpoint; a leaked template costs nothing and
-		// is visible in the RunPod console if manual cleanup is ever needed.
+		// Best-effort: a leaked template costs nothing and is visible in
+		// the RunPod console if manual cleanup is ever needed, so template
+		// cleanup failures never block endpoint deletion.
 		if err := e.client.DeleteTemplate(ctx, templateID); err != nil {
 			e.log.Info("could not delete template backing endpoint", "template-id", templateID, "error", err)
 		}
@@ -259,7 +261,9 @@ func hasEndpointDrift(spec v1alpha1.EndpointParameters, observed *runpodclient.E
 	}
 	// GPU type order matters to RunPod (rental priority), so compare ordered.
 	// dataCenterIds is not compared: the API accepts it but never echoes it.
-	if spec.GPUTypeIDs != nil && !stringSlicesEqual(spec.GPUTypeIDs, observed.GPUTypeIDs) {
+	// Nil and empty both mean "unmanaged": the PATCH payload uses omitempty,
+	// so an empty list could never be reconciled anyway.
+	if len(spec.GPUTypeIDs) > 0 && !stringSlicesEqual(spec.GPUTypeIDs, observed.GPUTypeIDs) {
 		return true
 	}
 	return false
@@ -274,7 +278,8 @@ func hasTemplateDrift(spec v1alpha1.EndpointParameters, observed runpodclient.Te
 	if spec.ContainerDiskInGb != nil && *spec.ContainerDiskInGb != observed.ContainerDiskInGb {
 		return true
 	}
-	if spec.Env != nil && !stringMapsEqual(buildEnvMap(spec.Env), observed.Env) {
+	// Nil and empty both mean "unmanaged" (see hasEndpointDrift).
+	if len(spec.Env) > 0 && !stringMapsEqual(buildEnvMap(spec.Env), observed.Env) {
 		return true
 	}
 	return false
