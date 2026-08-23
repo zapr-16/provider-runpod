@@ -61,10 +61,11 @@ jobs:
           go-version-file: go.mod
 
       - name: Run govulncheck
-        # Pinned like the actions above: @latest would let an unreviewed
-        # release into a job that runs on every PR.
+        # No @version: installing from inside the module locks the tool to
+        # the version pinned in go.mod/go.sum (via tools/tools.go), so the
+        # resolution is reproducible and lockfile-enforced.
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+          go install golang.org/x/vuln/cmd/govulncheck
           govulncheck ./...
 
   test:

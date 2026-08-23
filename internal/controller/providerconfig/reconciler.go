@@ -30,9 +30,9 @@ const (
 	requeueInterval = 5 * time.Minute
 )
 
-// credentialStatus is implemented by both ProviderConfig and
+// conditionsSetter is implemented by both ProviderConfig and
 // ClusterProviderConfig status structs.
-type credentialStatus interface {
+type conditionsSetter interface {
 	SetConditions(c ...xpv2.Condition)
 }
 
@@ -44,7 +44,7 @@ type credentialStatus interface {
 // ClusterReconciler.Reconcile.
 type providerConfigObject interface {
 	client.Object
-	credentialStatus
+	conditionsSetter
 	// GetCondition returns the condition of the given type, the zero
 	// Condition if absent. Used to detect whether validateCredentials
 	// actually changed the Ready condition, so an unchanged outcome can
@@ -75,7 +75,7 @@ func readyConditionEqual(a, b xpv2.Condition) bool {
 // still persist the Unavailable status before returning. baseURL, if
 // non-empty, overrides the RunPod REST base URL (used by tests to point at
 // an httptest server instead of the real API).
-func validateCredentials(ctx context.Context, kube client.Client, creds xpv2.CommonCredentialSelectors, status credentialStatus, baseURL string) error {
+func validateCredentials(ctx context.Context, kube client.Client, creds xpv2.CommonCredentialSelectors, status conditionsSetter, baseURL string) error {
 	var opts []runpodclient.Option
 	if baseURL != "" {
 		opts = append(opts, runpodclient.WithBaseURL(baseURL))
@@ -99,9 +99,9 @@ func validateCredentials(ctx context.Context, kube client.Client, creds xpv2.Com
 // reconcileOne implements the shared body of Reconciler.Reconcile and
 // ClusterReconciler.Reconcile: get the object, validate its credentials,
 // persist status, and requeue. newObj must return a fresh zero-value
-// pointer for kube.Get to decode into; readyMsg/notReadyMsg are the
-// kind-specific log lines.
-func reconcileOne[T providerConfigObject](ctx context.Context, kube client.Client, baseURL string, log *zap.Logger, req ctrl.Request, newObj func() T, readyMsg, notReadyMsg string) (ctrl.Result, error) {
+// pointer for kube.Get to decode into; kind is the human-readable kind
+// name used in log lines.
+func reconcileOne[T providerConfigObject](ctx context.Context, kube client.Client, baseURL string, log *zap.Logger, req ctrl.Request, newObj func() T, kind string) (ctrl.Result, error) {
 	pc := newObj()
 	if err := kube.Get(ctx, req.NamespacedName, pc); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -114,7 +114,7 @@ func reconcileOne[T providerConfigObject](ctx context.Context, kube client.Clien
 
 	validateErr := validateCredentials(ctx, kube, pc.Credentials(), pc, baseURL)
 	if validateErr != nil {
-		log.Error(notReadyMsg, zap.Error(validateErr))
+		log.Error(kind+" is not ready", zap.Error(validateErr))
 	}
 
 	// Skip the write entirely when nothing observable changed: the
@@ -133,7 +133,7 @@ func reconcileOne[T providerConfigObject](ctx context.Context, kube client.Clien
 		return ctrl.Result{}, validateErr
 	}
 
-	log.Info(readyMsg)
+	log.Info(kind + " is ready")
 	return ctrl.Result{RequeueAfter: requeueInterval}, nil
 }
 
@@ -166,7 +166,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	return reconcileOne(ctx, r.kube, r.baseURL, log, req,
 		func() *v1beta1.ProviderConfig { return &v1beta1.ProviderConfig{} },
-		"provider config is ready", "provider config is not ready")
+		"provider config")
 }
 
 // ClusterReconciler reconciles cluster-scoped ClusterProviderConfig
@@ -200,5 +200,5 @@ func (r *ClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	return reconcileOne(ctx, r.kube, r.baseURL, log, req,
 		func() *v1beta1.ClusterProviderConfig { return &v1beta1.ClusterProviderConfig{} },
-		"cluster provider config is ready", "cluster provider config is not ready")
+		"cluster provider config")
 }

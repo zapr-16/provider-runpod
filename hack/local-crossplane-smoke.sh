@@ -124,7 +124,6 @@ attempt_smoke() {
   local external_name=""
   local desired_status=""
   local public_ip=""
-  local port_mapping=""
   local synced_message=""
 
   wait_for_delete

@@ -3,7 +3,9 @@
 package tools
 
 import (
-	// Blank import pins controller-gen in go.mod so `make generate`
-	// installs a version consistent with the module graph.
+	// Blank imports pin these tools in go.mod/go.sum so `make generate`
+	// and CI install versions locked by the module graph rather than
+	// resolving them at install time.
+	_ "golang.org/x/vuln/cmd/govulncheck"
 	_ "sigs.k8s.io/controller-tools/cmd/controller-gen"
 )

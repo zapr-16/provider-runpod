@@ -59,7 +59,8 @@ cleanup() {
 trap cleanup EXIT
 
 fail() {
-  echo "FAIL: $1" >&2
+  local message="$1"
+  echo "FAIL: ${message}" >&2
   exit 1
 }
 
