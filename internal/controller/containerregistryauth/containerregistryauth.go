@@ -1,0 +1,80 @@
+package containerregistryauth
+
+import (
+	"context"
+
+	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
+	managed "github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
+	xpresource "github.com/crossplane/crossplane-runtime/v2/pkg/resource"
+	"github.com/go-logr/logr"
+	"github.com/pkg/errors"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	v1alpha1 "github.com/zapr-16/provider-runpod/apis/v1alpha1"
+	v1beta1 "github.com/zapr-16/provider-runpod/apis/v1beta1"
+	runpodclient "github.com/zapr-16/provider-runpod/internal/clients"
+)
+
+const (
+	errNotContainerRegistryAuth = "managed resource is not a ContainerRegistryAuth"
+	errMissingProviderConfig    = "container registry auth is missing providerConfigRef"
+	errTrackUsage               = "cannot track ProviderConfigUsage"
+)
+
+type connector struct {
+	kube  client.Client
+	usage *xpresource.ProviderConfigUsageTracker
+	log   logr.Logger
+}
+
+func (c *connector) Connect(ctx context.Context, mg xpresource.Managed) (managed.ExternalClient, error) {
+	cra, ok := mg.(*v1alpha1.ContainerRegistryAuth)
+	if !ok {
+		return nil, errors.New(errNotContainerRegistryAuth)
+	}
+
+	ref := cra.GetProviderConfigReference()
+	if ref == nil || ref.Name == "" {
+		return nil, errors.New(errMissingProviderConfig)
+	}
+
+	runpodclient.NormalizeProviderConfigRefKind(ref)
+
+	// Record the usage so Crossplane's in-use protection blocks deletion
+	// of the ProviderConfig while this ContainerRegistryAuth still needs it.
+	if err := c.usage.Track(ctx, cra); err != nil {
+		return nil, errors.Wrap(err, errTrackUsage)
+	}
+
+	rc, err := runpodclient.ClientForProviderConfigRef(ctx, c.kube, cra.GetNamespace(), *ref)
+	if err != nil {
+		return nil, err
+	}
+
+	return &external{
+		client: rc,
+		kube:   c.kube,
+		log:    c.log.WithValues("containerregistryauth", cra.GetName()),
+	}, nil
+}
+
+// Setup registers the ContainerRegistryAuth managed-resource controller
+// with the manager.
+func Setup(mgr ctrl.Manager, log logr.Logger) error {
+	name := xpresource.ManagedKind(v1alpha1.SchemeGroupVersion.WithKind("ContainerRegistryAuth"))
+	r := managed.NewReconciler(
+		mgr,
+		name,
+		managed.WithExternalConnector(&connector{
+			kube:  mgr.GetClient(),
+			usage: xpresource.NewProviderConfigUsageTracker(mgr.GetClient(), &v1beta1.ProviderConfigUsage{}),
+			log:   log,
+		}),
+		managed.WithLogger(logging.NewLogrLogger(log)),
+	)
+
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&v1alpha1.ContainerRegistryAuth{}).
+		Complete(r)
+}

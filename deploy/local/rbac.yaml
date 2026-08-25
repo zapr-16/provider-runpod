@@ -82,6 +82,9 @@ rules:
       - networkvolumes
       - networkvolumes/status
       - networkvolumes/finalizers
+      - containerregistryauths
+      - containerregistryauths/status
+      - containerregistryauths/finalizers
     verbs:
       - get
       - list

@@ -25,4 +25,5 @@ func init() {
 	SchemeBuilder.Register(&Pod{}, &PodList{})
 	SchemeBuilder.Register(&Endpoint{}, &EndpointList{})
 	SchemeBuilder.Register(&NetworkVolume{}, &NetworkVolumeList{})
+	SchemeBuilder.Register(&ContainerRegistryAuth{}, &ContainerRegistryAuthList{})
 }

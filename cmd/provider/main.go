@@ -14,6 +14,7 @@ import (
 
 	v1alpha1 "github.com/zapr-16/provider-runpod/apis/v1alpha1"
 	v1beta1 "github.com/zapr-16/provider-runpod/apis/v1beta1"
+	containerregistryauthcontroller "github.com/zapr-16/provider-runpod/internal/controller/containerregistryauth"
 	endpointcontroller "github.com/zapr-16/provider-runpod/internal/controller/endpoint"
 	networkvolumecontroller "github.com/zapr-16/provider-runpod/internal/controller/networkvolume"
 	podcontroller "github.com/zapr-16/provider-runpod/internal/controller/pod"
@@ -90,6 +91,11 @@ func main() {
 
 	if err := networkvolumecontroller.Setup(mgr, logger.WithName("networkvolume")); err != nil {
 		logger.Error(err, "cannot set up NetworkVolume controller")
+		os.Exit(1)
+	}
+
+	if err := containerregistryauthcontroller.Setup(mgr, logger.WithName("containerregistryauth")); err != nil {
+		logger.Error(err, "cannot set up ContainerRegistryAuth controller")
 		os.Exit(1)
 	}
 
