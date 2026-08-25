@@ -49,33 +49,81 @@ type Client struct {
 	apiKey     string
 }
 
-// CreatePodRequest mirrors the RunPod pod create payload used by the provider.
+// CreatePodRequest mirrors the RunPod pod create payload (POST /pods, 1:1).
 type CreatePodRequest struct {
-	Name              *string           `json:"name,omitempty"`
-	ImageName         *string           `json:"imageName,omitempty"`
-	GPUTypeIDs        []string          `json:"gpuTypeIds,omitempty"`
-	GPUCount          *int32            `json:"gpuCount,omitempty"`
-	CloudType         *string           `json:"cloudType,omitempty"`
-	SupportPublicIP   *bool             `json:"supportPublicIp,omitempty"`
-	ContainerDiskInGb *int32            `json:"containerDiskInGb,omitempty"`
-	VolumeInGb        *int32            `json:"volumeInGb,omitempty"`
-	VolumeMountPath   *string           `json:"volumeMountPath,omitempty"`
-	Env               map[string]string `json:"env,omitempty"`
-	Ports             []string          `json:"ports,omitempty"`
-	DockerStartCmd    []string          `json:"dockerStartCmd,omitempty"`
+	Name                    *string           `json:"name,omitempty"`
+	ImageName               *string           `json:"imageName,omitempty"`
+	GPUTypeIDs              []string          `json:"gpuTypeIds,omitempty"`
+	GPUCount                *int32            `json:"gpuCount,omitempty"`
+	CloudType               *string           `json:"cloudType,omitempty"`
+	SupportPublicIP         *bool             `json:"supportPublicIp,omitempty"`
+	ContainerDiskInGb       *int32            `json:"containerDiskInGb,omitempty"`
+	VolumeInGb              *int32            `json:"volumeInGb,omitempty"`
+	VolumeMountPath         *string           `json:"volumeMountPath,omitempty"`
+	Env                     map[string]string `json:"env,omitempty"`
+	Ports                   []string          `json:"ports,omitempty"`
+	DockerStartCmd          []string          `json:"dockerStartCmd,omitempty"`
+	DockerEntrypoint        []string          `json:"dockerEntrypoint,omitempty"`
+	ComputeType             *string           `json:"computeType,omitempty"`
+	VCPUCount               *int32            `json:"vcpuCount,omitempty"`
+	CPUFlavorIDs            []string          `json:"cpuFlavorIds,omitempty"`
+	CPUFlavorPriority       *string           `json:"cpuFlavorPriority,omitempty"`
+	DataCenterIDs           []string          `json:"dataCenterIds,omitempty"`
+	DataCenterPriority      *string           `json:"dataCenterPriority,omitempty"`
+	GPUTypePriority         *string           `json:"gpuTypePriority,omitempty"`
+	CountryCodes            []string          `json:"countryCodes,omitempty"`
+	Interruptible           *bool             `json:"interruptible,omitempty"`
+	Locked                  *bool             `json:"locked,omitempty"`
+	GlobalNetworking        *bool             `json:"globalNetworking,omitempty"`
+	VolumeEncrypted         *bool             `json:"volumeEncrypted,omitempty"`
+	AllowedCudaVersions     []string          `json:"allowedCudaVersions,omitempty"`
+	MinRAMPerGPU            *int32            `json:"minRAMPerGPU,omitempty"`
+	MinVCPUPerGPU           *int32            `json:"minVCPUPerGPU,omitempty"`
+	MinDiskBandwidthMBps    *int32            `json:"minDiskBandwidthMBps,omitempty"`
+	MinDownloadMbps         *int32            `json:"minDownloadMbps,omitempty"`
+	MinUploadMbps           *int32            `json:"minUploadMbps,omitempty"`
+	TemplateID              *string           `json:"templateId,omitempty"`
+	NetworkVolumeID         *string           `json:"networkVolumeId,omitempty"`
+	ContainerRegistryAuthID *string           `json:"containerRegistryAuthId,omitempty"`
+}
+
+// UpdatePodRequest mirrors the RunPod pod PATCH payload. RunPod applies
+// container-level changes (image, env, ...) when the pod next (re)starts.
+type UpdatePodRequest struct {
+	Name                    *string           `json:"name,omitempty"`
+	ImageName               *string           `json:"imageName,omitempty"`
+	ContainerDiskInGb       *int32            `json:"containerDiskInGb,omitempty"`
+	VolumeInGb              *int32            `json:"volumeInGb,omitempty"`
+	VolumeMountPath         *string           `json:"volumeMountPath,omitempty"`
+	Env                     map[string]string `json:"env,omitempty"`
+	Ports                   []string          `json:"ports,omitempty"`
+	DockerStartCmd          []string          `json:"dockerStartCmd,omitempty"`
+	DockerEntrypoint        []string          `json:"dockerEntrypoint,omitempty"`
+	Locked                  *bool             `json:"locked,omitempty"`
+	GlobalNetworking        *bool             `json:"globalNetworking,omitempty"`
+	ContainerRegistryAuthID *string           `json:"containerRegistryAuthId,omitempty"`
 }
 
 // PodResponse mirrors the subset of the RunPod Pod GET response needed by Observe().
 type PodResponse struct {
-	ID            string            `json:"id"`
-	DesiredStatus string            `json:"desiredStatus"`
-	PublicIP      string            `json:"publicIp"`
-	PortMappings  map[string]int32  `json:"portMappings"`
-	CostPerHr     float64           `json:"costPerHr"`
-	LastStartedAt string            `json:"lastStartedAt"`
-	Env           map[string]string `json:"env"`
-	Ports         []string          `json:"ports"`
-	GPU           struct {
+	ID                      string            `json:"id"`
+	DesiredStatus           string            `json:"desiredStatus"`
+	PublicIP                string            `json:"publicIp"`
+	PortMappings            map[string]int32  `json:"portMappings"`
+	CostPerHr               float64           `json:"costPerHr"`
+	LastStartedAt           string            `json:"lastStartedAt"`
+	Env                     map[string]string `json:"env"`
+	Ports                   []string          `json:"ports"`
+	Image                   string            `json:"image"`
+	DockerStartCmd          []string          `json:"dockerStartCmd"`
+	DockerEntrypoint        []string          `json:"dockerEntrypoint"`
+	ContainerDiskInGb       int32             `json:"containerDiskInGb"`
+	VolumeInGb              int32             `json:"volumeInGb"`
+	VolumeMountPath         string            `json:"volumeMountPath"`
+	Locked                  bool              `json:"locked"`
+	Interruptible           bool              `json:"interruptible"`
+	ContainerRegistryAuthID string            `json:"containerRegistryAuthId"`
+	GPU                     struct {
 		DisplayName string `json:"displayName"`
 	} `json:"gpu"`
 	Machine struct {
@@ -282,6 +330,47 @@ func (c *Client) DeletePod(ctx context.Context, podID string) error {
 		return errors.Errorf("RunPod DELETE /pods/%s returned status %d: %s", podID, resp.StatusCode, readErrorBody(resp.Body))
 	}
 
+	return nil
+}
+
+// UpdatePod patches mutable fields of a RunPod pod. RunPod applies
+// container-level changes when the pod next (re)starts.
+func (c *Client) UpdatePod(ctx context.Context, podID string, payload UpdatePodRequest) error {
+	if err := validateResourceID(podID); err != nil {
+		return err
+	}
+	return c.doJSON(ctx, http.MethodPatch, "/pods/"+podID, payload, nil)
+}
+
+// StartPod starts or resumes a stopped pod (POST /pods/{podId}/start).
+func (c *Client) StartPod(ctx context.Context, podID string) error {
+	return c.podAction(ctx, podID, "start")
+}
+
+// StopPod stops a running pod without deleting it (POST /pods/{podId}/stop).
+// The pod keeps its volume and keeps billing storage while stopped.
+func (c *Client) StopPod(ctx context.Context, podID string) error {
+	return c.podAction(ctx, podID, "stop")
+}
+
+func (c *Client) podAction(ctx context.Context, podID, action string) error {
+	if err := validateResourceID(podID); err != nil {
+		return err
+	}
+	req, err := c.NewRequest(ctx, http.MethodPost, "/pods/"+podID+"/"+action, nil)
+	if err != nil {
+		return errors.Wrap(err, errCreateRequest)
+	}
+	resp, err := c.Do(req)
+	if err != nil {
+		return errors.Wrap(err, errDoRequest)
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return errors.Errorf("RunPod POST /pods/%s/%s returned status %d: %s", podID, action, resp.StatusCode, readErrorBody(resp.Body))
+	}
 	return nil
 }
 
