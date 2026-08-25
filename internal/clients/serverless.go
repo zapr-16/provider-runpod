@@ -19,28 +19,46 @@ const (
 // CreateTemplateRequest mirrors the RunPod template create payload used for
 // the implicit template backing a serverless Endpoint.
 type CreateTemplateRequest struct {
-	Name              string            `json:"name"`
-	ImageName         string            `json:"imageName"`
-	IsServerless      bool              `json:"isServerless"`
-	Env               map[string]string `json:"env,omitempty"`
-	ContainerDiskInGb *int32            `json:"containerDiskInGb,omitempty"`
+	Name                    string            `json:"name"`
+	ImageName               string            `json:"imageName"`
+	IsServerless            bool              `json:"isServerless"`
+	Env                     map[string]string `json:"env,omitempty"`
+	ContainerDiskInGb       *int32            `json:"containerDiskInGb,omitempty"`
+	DockerStartCmd          []string          `json:"dockerStartCmd,omitempty"`
+	DockerEntrypoint        []string          `json:"dockerEntrypoint,omitempty"`
+	ContainerRegistryAuthID *string           `json:"containerRegistryAuthId,omitempty"`
+	Ports                   []string          `json:"ports,omitempty"`
+	VolumeInGb              *int32            `json:"volumeInGb,omitempty"`
+	VolumeMountPath         *string           `json:"volumeMountPath,omitempty"`
 }
 
 // UpdateTemplateRequest mirrors the RunPod template PATCH payload.
 type UpdateTemplateRequest struct {
-	ImageName         *string           `json:"imageName,omitempty"`
-	Env               map[string]string `json:"env,omitempty"`
-	ContainerDiskInGb *int32            `json:"containerDiskInGb,omitempty"`
+	ImageName               *string           `json:"imageName,omitempty"`
+	Env                     map[string]string `json:"env,omitempty"`
+	ContainerDiskInGb       *int32            `json:"containerDiskInGb,omitempty"`
+	DockerStartCmd          []string          `json:"dockerStartCmd,omitempty"`
+	DockerEntrypoint        []string          `json:"dockerEntrypoint,omitempty"`
+	ContainerRegistryAuthID *string           `json:"containerRegistryAuthId,omitempty"`
+	Ports                   []string          `json:"ports,omitempty"`
+	VolumeInGb              *int32            `json:"volumeInGb,omitempty"`
+	VolumeMountPath         *string           `json:"volumeMountPath,omitempty"`
 }
 
 // TemplateResponse mirrors the subset of the RunPod template response the provider uses.
 type TemplateResponse struct {
-	ID                string            `json:"id"`
-	Name              string            `json:"name"`
-	ImageName         string            `json:"imageName"`
-	IsServerless      bool              `json:"isServerless"`
-	Env               map[string]string `json:"env"`
-	ContainerDiskInGb int32             `json:"containerDiskInGb"`
+	ID                      string            `json:"id"`
+	Name                    string            `json:"name"`
+	ImageName               string            `json:"imageName"`
+	IsServerless            bool              `json:"isServerless"`
+	Env                     map[string]string `json:"env"`
+	ContainerDiskInGb       int32             `json:"containerDiskInGb"`
+	DockerStartCmd          []string          `json:"dockerStartCmd"`
+	DockerEntrypoint        []string          `json:"dockerEntrypoint"`
+	ContainerRegistryAuthID string            `json:"containerRegistryAuthId"`
+	Ports                   []string          `json:"ports"`
+	VolumeInGb              int32             `json:"volumeInGb"`
+	VolumeMountPath         string            `json:"volumeMountPath"`
 }
 
 // CreateEndpointRequest mirrors the RunPod serverless endpoint create payload.

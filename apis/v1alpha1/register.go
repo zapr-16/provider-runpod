@@ -26,4 +26,5 @@ func init() {
 	SchemeBuilder.Register(&Endpoint{}, &EndpointList{})
 	SchemeBuilder.Register(&NetworkVolume{}, &NetworkVolumeList{})
 	SchemeBuilder.Register(&ContainerRegistryAuth{}, &ContainerRegistryAuthList{})
+	SchemeBuilder.Register(&Template{}, &TemplateList{})
 }

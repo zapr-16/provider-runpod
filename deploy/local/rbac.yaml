@@ -85,6 +85,9 @@ rules:
       - containerregistryauths
       - containerregistryauths/status
       - containerregistryauths/finalizers
+      - templates
+      - templates/status
+      - templates/finalizers
     verbs:
       - get
       - list

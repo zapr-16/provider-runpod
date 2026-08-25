@@ -19,6 +19,7 @@ import (
 	networkvolumecontroller "github.com/zapr-16/provider-runpod/internal/controller/networkvolume"
 	podcontroller "github.com/zapr-16/provider-runpod/internal/controller/pod"
 	providerconfigcontroller "github.com/zapr-16/provider-runpod/internal/controller/providerconfig"
+	templatecontroller "github.com/zapr-16/provider-runpod/internal/controller/template"
 )
 
 const errCreateManager = "cannot create controller manager"
@@ -96,6 +97,11 @@ func main() {
 
 	if err := containerregistryauthcontroller.Setup(mgr, logger.WithName("containerregistryauth")); err != nil {
 		logger.Error(err, "cannot set up ContainerRegistryAuth controller")
+		os.Exit(1)
+	}
+
+	if err := templatecontroller.Setup(mgr, logger.WithName("template")); err != nil {
+		logger.Error(err, "cannot set up Template controller")
 		os.Exit(1)
 	}
 
