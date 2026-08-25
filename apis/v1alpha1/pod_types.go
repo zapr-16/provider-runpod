@@ -253,8 +253,10 @@ type PodObservation struct {
 	NetworkingReady bool `json:"networkingReady"`
 
 	// True when immutable spec fields diverge from the running pod
-	// (placement can never be reconciled in place). Mutable-field drift is
-	// reconciled via PATCH instead.
+	// (currently: observed GPU type not in gpuTypeIds, or interruptible
+	// mismatch). Immutable drift can only come from spec edits after
+	// creation and can never be reconciled in place. Mutable-field drift
+	// is reconciled via PATCH instead and never appears here.
 	DriftDetected bool `json:"driftDetected,omitempty"`
 }
 

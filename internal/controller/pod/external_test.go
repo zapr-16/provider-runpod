@@ -381,6 +381,98 @@ func TestObserve(t *testing.T) {
 				},
 			},
 		},
+		"GPUTypeDriftIsImmutableAndUpToDateButFlagged": {
+			// GPU type is not PATCHable: divergence is surfaced only via
+			// status.atProvider.driftDetected, never via ResourceUpToDate.
+			externalName: "pod-123",
+			spec: v1alpha1.PodParameters{
+				GPUTypeIDs: []string{"NVIDIA L4"},
+			},
+			status:     v1alpha1.PodObservation{PodID: "existing"},
+			statusCode: http.StatusOK,
+			response: &runpodclient.PodResponse{
+				ID:            "pod-123",
+				DesiredStatus: "RUNNING",
+				Machine: struct {
+					GPUDisplayName string `json:"gpuDisplayName"`
+					GPUTypeID      string `json:"gpuTypeId"`
+				}{
+					GPUTypeID: "NVIDIA RTX A4000",
+				},
+			},
+			wantCalls: 1,
+			want: want{
+				exists:          true,
+				upToDate:        true,
+				driftDetected:   true,
+				readyStatus:     corev1.ConditionFalse,
+				readyReason:     xpv2.ReasonCreating,
+				networkingReady: false,
+				podID:           "pod-123",
+				connection: managed.ConnectionDetails{
+					"podId": []byte("pod-123"),
+				},
+			},
+		},
+		"GPUTypeMatchingOneOfPriorityListIsNotDrift": {
+			// gpuTypeIds is a priority-ordered list: membership, not
+			// equality with the first element, is the correct check.
+			externalName: "pod-123",
+			spec: v1alpha1.PodParameters{
+				GPUTypeIDs: []string{"NVIDIA RTX A4000", "NVIDIA L4"},
+			},
+			status:     v1alpha1.PodObservation{PodID: "existing"},
+			statusCode: http.StatusOK,
+			response: &runpodclient.PodResponse{
+				ID:            "pod-123",
+				DesiredStatus: "RUNNING",
+				Machine: struct {
+					GPUDisplayName string `json:"gpuDisplayName"`
+					GPUTypeID      string `json:"gpuTypeId"`
+				}{
+					GPUTypeID: "NVIDIA L4",
+				},
+			},
+			wantCalls: 1,
+			want: want{
+				exists:          true,
+				upToDate:        true,
+				driftDetected:   false,
+				readyStatus:     corev1.ConditionFalse,
+				readyReason:     xpv2.ReasonCreating,
+				networkingReady: false,
+				podID:           "pod-123",
+				connection: managed.ConnectionDetails{
+					"podId": []byte("pod-123"),
+				},
+			},
+		},
+		"InterruptibleDriftIsImmutableAndFlagged": {
+			externalName: "pod-123",
+			spec: v1alpha1.PodParameters{
+				Interruptible: ptrBool(true),
+			},
+			status:     v1alpha1.PodObservation{PodID: "existing"},
+			statusCode: http.StatusOK,
+			response: &runpodclient.PodResponse{
+				ID:            "pod-123",
+				DesiredStatus: "RUNNING",
+				Interruptible: false,
+			},
+			wantCalls: 1,
+			want: want{
+				exists:          true,
+				upToDate:        true,
+				driftDetected:   true,
+				readyStatus:     corev1.ConditionFalse,
+				readyReason:     xpv2.ReasonCreating,
+				networkingReady: false,
+				podID:           "pod-123",
+				connection: managed.ConnectionDetails{
+					"podId": []byte("pod-123"),
+				},
+			},
+		},
 		"LifecycleDriftExitedSpecVsRunningObservedIsNotUpToDate": {
 			externalName: "pod-123",
 			spec: v1alpha1.PodParameters{

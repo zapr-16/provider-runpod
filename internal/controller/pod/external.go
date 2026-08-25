@@ -163,10 +163,10 @@ func (e *external) Observe(ctx context.Context, mg xpresource.Managed) (managed.
 		pod.SetConditions(xpv2.Unavailable())
 	}
 
-	// Immutable placement drift can never be reconciled in place; surface it
-	// via status only. Mutable drift and lifecycle drift are reconciled by
-	// Update() via PATCH + start/stop.
-	pod.Status.AtProvider.DriftDetected = false
+	// Immutable spec fields can never be reconciled in place; surface their
+	// drift via status only. Mutable-field drift and lifecycle drift are
+	// reconciled by Update() via PATCH + start/stop.
+	pod.Status.AtProvider.DriftDetected = hasImmutableDrift(pod.Spec.ForProvider, response)
 	upToDate := !hasMutableDrift(pod.Spec.ForProvider, response) &&
 		!hasLifecycleDrift(pod.Spec.ForProvider, response.DesiredStatus)
 
@@ -473,6 +473,29 @@ func hasMutableDrift(spec v1alpha1.PodParameters, r *runpodclient.PodResponse) b
 	// globalNetworking is write-only (never echoed) and excluded, like
 	// dataCenterIds on Endpoint.
 	return hasEnvDrift(spec.Env, r.Env) || hasPortsDrift(spec.Ports, r.Ports)
+}
+
+// hasImmutableDrift reports whether immutable spec fields diverge from the
+// running pod. Immutable drift can only come from editing the spec after
+// creation; it can never be reconciled in place, so it is surfaced via
+// status.atProvider.driftDetected instead of blocking the Synced condition.
+// Only fields the GET response reliably echoes participate: the observed
+// GPU type must be one of the acceptable spec types (the list is a
+// priority order, so membership — not equality — is the correct check),
+// and the Spot/interruptible flag must match.
+func hasImmutableDrift(spec v1alpha1.PodParameters, r *runpodclient.PodResponse) bool {
+	if spec.Interruptible != nil && *spec.Interruptible != r.Interruptible {
+		return true
+	}
+	if len(spec.GPUTypeIDs) > 0 && r.Machine.GPUTypeID != "" {
+		for _, id := range spec.GPUTypeIDs {
+			if id == r.Machine.GPUTypeID {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 // hasLifecycleDrift reports whether the observed lifecycle status diverges
