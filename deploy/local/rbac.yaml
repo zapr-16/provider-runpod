@@ -79,6 +79,9 @@ rules:
       - endpoints
       - endpoints/status
       - endpoints/finalizers
+      - networkvolumes
+      - networkvolumes/status
+      - networkvolumes/finalizers
     verbs:
       - get
       - list
