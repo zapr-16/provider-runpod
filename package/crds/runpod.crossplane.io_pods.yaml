@@ -45,14 +45,71 @@ spec:
                 description: PodParameters define the desired state inputs for a RunPod
                   pod.
                 properties:
+                  allowedCudaVersions:
+                    description: Acceptable CUDA versions on the host.
+                    items:
+                      type: string
+                    type: array
                   cloudType:
                     description: RunPod cloud class for scheduling, limited to SECURE
                       or COMMUNITY.
+                    type: string
+                  computeType:
+                    description: GPU vs CPU pod. Defaults to GPU server-side.
+                    enum:
+                    - GPU
+                    - CPU
                     type: string
                   containerDiskInGb:
                     description: Size of the ephemeral container disk in GiB.
                     format: int32
                     type: integer
+                  containerRegistryAuthId:
+                    description: ID of a ContainerRegistryAuth for pulling private
+                      images.
+                    type: string
+                  countryCodes:
+                    description: Restrict placement to specific countries (ISO codes).
+                    items:
+                      type: string
+                    type: array
+                  cpuFlavorIds:
+                    description: Acceptable CPU flavor IDs (CPU pods).
+                    items:
+                      type: string
+                    type: array
+                  cpuFlavorPriority:
+                    description: 'CPU flavor selection strategy: availability or custom.'
+                    enum:
+                    - availability
+                    - custom
+                    type: string
+                  dataCenterIds:
+                    description: Restrict placement to specific data center IDs.
+                    items:
+                      type: string
+                    type: array
+                  dataCenterPriority:
+                    description: 'Data center selection strategy: availability or
+                      custom.'
+                    enum:
+                    - availability
+                    - custom
+                    type: string
+                  desiredState:
+                    description: |-
+                      DesiredState drives the pod lifecycle: RUNNING starts/resumes the
+                      pod, EXITED stops it (storage keeps billing while stopped).
+                      Unset means RUNNING.
+                    enum:
+                    - RUNNING
+                    - EXITED
+                    type: string
+                  dockerEntrypoint:
+                    description: Entrypoint array overriding the image ENTRYPOINT.
+                    items:
+                      type: string
+                    type: array
                   dockerStartCmd:
                     description: Command array passed to the container as its startup
                       command.
@@ -75,6 +132,11 @@ spec:
                       - value
                       type: object
                     type: array
+                  globalNetworking:
+                    description: |-
+                      Enable RunPod global networking for the pod.
+                      Write-only: the API accepts it but does not echo it back.
+                    type: boolean
                   gpuCount:
                     description: Number of GPUs requested for the pod.
                     format: int32
@@ -85,8 +147,47 @@ spec:
                     items:
                       type: string
                     type: array
+                  gpuTypePriority:
+                    description: 'GPU type selection strategy: availability or custom.'
+                    enum:
+                    - availability
+                    - custom
+                    type: string
                   imageName:
                     description: Container image to run for the pod workload.
+                    type: string
+                  interruptible:
+                    description: |-
+                      Rent interruptible (Spot) capacity: cheaper, may be reclaimed.
+                      Combine with recreateOnTerminate for auto-replacement.
+                    type: boolean
+                  locked:
+                    description: Prevent the pod from being modified or deleted from
+                      the RunPod console.
+                    type: boolean
+                  minDiskBandwidthMBps:
+                    description: Minimum disk bandwidth in MBps.
+                    format: int32
+                    type: integer
+                  minDownloadMbps:
+                    description: Minimum download bandwidth in Mbps.
+                    format: int32
+                    type: integer
+                  minRAMPerGPU:
+                    description: Minimum RAM per GPU in GB.
+                    format: int32
+                    type: integer
+                  minUploadMbps:
+                    description: Minimum upload bandwidth in Mbps.
+                    format: int32
+                    type: integer
+                  minVCPUPerGPU:
+                    description: Minimum vCPUs per GPU.
+                    format: int32
+                    type: integer
+                  networkVolumeId:
+                    description: Network volume to attach (must be in the same data
+                      center).
                     type: string
                   ports:
                     description: Container ports to expose, later serialized to RunPod
@@ -117,6 +218,18 @@ spec:
                   supportPublicIp:
                     description: Request a public IP for COMMUNITY cloud pods so exposed
                       ports receive external mappings.
+                    type: boolean
+                  templateId:
+                    description: |-
+                      RunPod template to create the pod from. Direct fields set here
+                      override template values server-side.
+                    type: string
+                  vcpuCount:
+                    description: Number of vCPUs (CPU pods).
+                    format: int32
+                    type: integer
+                  volumeEncrypted:
+                    description: Encrypt the pod volume.
                     type: boolean
                   volumeInGb:
                     description: Size of the persisted pod volume in GiB.
@@ -201,9 +314,9 @@ spec:
                     type: string
                   driftDetected:
                     description: |-
-                      True when mutable-looking spec fields (env, ports) diverge from the
-                      running pod. RunPod pods are immutable, so drift cannot be reconciled
-                      in place; it is surfaced here instead of blocking the Synced condition.
+                      True when immutable spec fields diverge from the running pod
+                      (placement can never be reconciled in place). Mutable-field drift is
+                      reconciled via PATCH instead.
                     type: boolean
                   gpuDisplayName:
                     description: Human-readable GPU name from machine.gpuDisplayName,

@@ -42,7 +42,6 @@ type Port struct {
 type PodParameters struct {
 	// Container image to run for the pod workload.
 	// +optional
-	// +immutable
 	ImageName *string `json:"imageName,omitempty"`
 
 	// Ordered set of acceptable RunPod GPU type IDs for placement.
@@ -67,17 +66,14 @@ type PodParameters struct {
 
 	// Size of the ephemeral container disk in GiB.
 	// +optional
-	// +immutable
 	ContainerDiskInGb *int32 `json:"containerDiskInGb,omitempty"`
 
 	// Size of the persisted pod volume in GiB.
 	// +optional
-	// +immutable
 	VolumeInGb *int32 `json:"volumeInGb,omitempty"`
 
 	// Mount path inside the container for the persisted pod volume.
 	// +optional
-	// +immutable
 	VolumeMountPath *string `json:"volumeMountPath,omitempty"`
 
 	// Environment variables injected into the container at startup.
@@ -90,7 +86,6 @@ type PodParameters struct {
 
 	// Command array passed to the container as its startup command.
 	// +optional
-	// +immutable
 	DockerStartCmd []string `json:"dockerStartCmd,omitempty"`
 
 	// RecreateOnTerminate causes the controller to clear the external
@@ -103,6 +98,126 @@ type PodParameters struct {
 	// specific instance. Defaults to false (manual recreate).
 	// +optional
 	RecreateOnTerminate *bool `json:"recreateOnTerminate,omitempty"`
+
+	// DesiredState drives the pod lifecycle: RUNNING starts/resumes the
+	// pod, EXITED stops it (storage keeps billing while stopped).
+	// Unset means RUNNING.
+	// +kubebuilder:validation:Enum=RUNNING;EXITED
+	// +optional
+	DesiredState *string `json:"desiredState,omitempty"`
+
+	// Entrypoint array overriding the image ENTRYPOINT.
+	// +optional
+	DockerEntrypoint []string `json:"dockerEntrypoint,omitempty"`
+
+	// Prevent the pod from being modified or deleted from the RunPod console.
+	// +optional
+	Locked *bool `json:"locked,omitempty"`
+
+	// Enable RunPod global networking for the pod.
+	// Write-only: the API accepts it but does not echo it back.
+	// +optional
+	GlobalNetworking *bool `json:"globalNetworking,omitempty"`
+
+	// ID of a ContainerRegistryAuth for pulling private images.
+	// +optional
+	ContainerRegistryAuthID *string `json:"containerRegistryAuthId,omitempty"`
+
+	// Rent interruptible (Spot) capacity: cheaper, may be reclaimed.
+	// Combine with recreateOnTerminate for auto-replacement.
+	// +optional
+	// +immutable
+	Interruptible *bool `json:"interruptible,omitempty"`
+
+	// GPU vs CPU pod. Defaults to GPU server-side.
+	// +kubebuilder:validation:Enum=GPU;CPU
+	// +optional
+	// +immutable
+	ComputeType *string `json:"computeType,omitempty"`
+
+	// Number of vCPUs (CPU pods).
+	// +optional
+	// +immutable
+	VCPUCount *int32 `json:"vcpuCount,omitempty"`
+
+	// Acceptable CPU flavor IDs (CPU pods).
+	// +optional
+	// +immutable
+	CPUFlavorIDs []string `json:"cpuFlavorIds,omitempty"`
+
+	// CPU flavor selection strategy: availability or custom.
+	// +kubebuilder:validation:Enum=availability;custom
+	// +optional
+	// +immutable
+	CPUFlavorPriority *string `json:"cpuFlavorPriority,omitempty"`
+
+	// Restrict placement to specific data center IDs.
+	// +optional
+	// +immutable
+	DataCenterIDs []string `json:"dataCenterIds,omitempty"`
+
+	// Data center selection strategy: availability or custom.
+	// +kubebuilder:validation:Enum=availability;custom
+	// +optional
+	// +immutable
+	DataCenterPriority *string `json:"dataCenterPriority,omitempty"`
+
+	// GPU type selection strategy: availability or custom.
+	// +kubebuilder:validation:Enum=availability;custom
+	// +optional
+	// +immutable
+	GPUTypePriority *string `json:"gpuTypePriority,omitempty"`
+
+	// Restrict placement to specific countries (ISO codes).
+	// +optional
+	// +immutable
+	CountryCodes []string `json:"countryCodes,omitempty"`
+
+	// Acceptable CUDA versions on the host.
+	// +optional
+	// +immutable
+	AllowedCudaVersions []string `json:"allowedCudaVersions,omitempty"`
+
+	// Minimum RAM per GPU in GB.
+	// +optional
+	// +immutable
+	MinRAMPerGPU *int32 `json:"minRAMPerGPU,omitempty"`
+
+	// Minimum vCPUs per GPU.
+	// +optional
+	// +immutable
+	MinVCPUPerGPU *int32 `json:"minVCPUPerGPU,omitempty"`
+
+	// Minimum disk bandwidth in MBps.
+	// +optional
+	// +immutable
+	MinDiskBandwidthMBps *int32 `json:"minDiskBandwidthMBps,omitempty"`
+
+	// Minimum download bandwidth in Mbps.
+	// +optional
+	// +immutable
+	MinDownloadMbps *int32 `json:"minDownloadMbps,omitempty"`
+
+	// Minimum upload bandwidth in Mbps.
+	// +optional
+	// +immutable
+	MinUploadMbps *int32 `json:"minUploadMbps,omitempty"`
+
+	// RunPod template to create the pod from. Direct fields set here
+	// override template values server-side.
+	// +optional
+	// +immutable
+	TemplateID *string `json:"templateId,omitempty"`
+
+	// Network volume to attach (must be in the same data center).
+	// +optional
+	// +immutable
+	NetworkVolumeID *string `json:"networkVolumeId,omitempty"`
+
+	// Encrypt the pod volume.
+	// +optional
+	// +immutable
+	VolumeEncrypted *bool `json:"volumeEncrypted,omitempty"`
 }
 
 // PodObservation captures the observed state returned by RunPod.
@@ -137,9 +252,9 @@ type PodObservation struct {
 	// either an HTTP proxy URL or a public IP with port mappings.
 	NetworkingReady bool `json:"networkingReady"`
 
-	// True when mutable-looking spec fields (env, ports) diverge from the
-	// running pod. RunPod pods are immutable, so drift cannot be reconciled
-	// in place; it is surfaced here instead of blocking the Synced condition.
+	// True when immutable spec fields diverge from the running pod
+	// (placement can never be reconciled in place). Mutable-field drift is
+	// reconciled via PATCH instead.
 	DriftDetected bool `json:"driftDetected,omitempty"`
 }
 
