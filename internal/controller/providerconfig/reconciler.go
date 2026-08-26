@@ -113,9 +113,6 @@ func reconcileOne[T providerConfigObject](ctx context.Context, kube client.Clien
 	before := pc.GetCondition(xpv2.TypeReady)
 
 	validateErr := validateCredentials(ctx, kube, pc.Credentials(), pc, baseURL)
-	if validateErr != nil {
-		log.Error(kind+" is not ready", zap.Error(validateErr))
-	}
 
 	// Skip the write entirely when nothing observable changed: the
 	// reconciler re-validates credentials every 5 minutes even when nothing

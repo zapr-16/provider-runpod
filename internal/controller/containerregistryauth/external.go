@@ -45,12 +45,15 @@ func (e *external) Observe(ctx context.Context, mg xpresource.Managed) (managed.
 		return managed.ExternalObservation{}, errors.Wrap(err, errGetContainerRegistryAuth)
 	}
 	if !found {
+		e.log.Info("ContainerRegistryAuth not found in RunPod API", "external-name", externalName)
 		return managed.ExternalObservation{ResourceExists: false}, nil
 	}
 	cra.Status.AtProvider = v1alpha1.ContainerRegistryAuthObservation{
 		ContainerRegistryAuthID: response.ID,
 		Name:                    response.Name,
 	}
+	// The RunPod API exposes no intermediate provisioning state for
+	// container registry auths, so found == Available.
 	cra.SetConditions(xpv2.Available())
 	// The kind is immutable: RunPod has no update endpoint for registry
 	// auths, so a found resource is always up to date.

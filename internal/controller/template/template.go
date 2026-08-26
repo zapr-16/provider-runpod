@@ -28,6 +28,11 @@ type connector struct {
 	log   logr.Logger
 }
 
+var (
+	_ managed.ExternalConnector = (*connector)(nil)
+	_ managed.ExternalClient    = (*external)(nil)
+)
+
 func (c *connector) Connect(ctx context.Context, mg xpresource.Managed) (managed.ExternalClient, error) {
 	tmpl, ok := mg.(*v1alpha1.Template)
 	if !ok {

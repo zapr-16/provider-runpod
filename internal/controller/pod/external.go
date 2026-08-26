@@ -174,10 +174,10 @@ func (e *external) Observe(ctx context.Context, mg xpresource.Managed) (managed.
 		"podId": []byte(externalName),
 	}
 	if endpoint != "" {
-		connectionDetails["endpoint"] = []byte(endpoint)
+		connectionDetails[xpv2.CredentialsSecretEndpointKey] = []byte(endpoint)
 	}
 	if resolvedPort != "" {
-		connectionDetails["port"] = []byte(resolvedPort)
+		connectionDetails[xpv2.CredentialsSecretPortKey] = []byte(resolvedPort)
 	}
 
 	// Never report ResourceLateInitialized: this provider does not
@@ -343,6 +343,9 @@ func hasEnvDrift(desired []v1alpha1.EnvVar, observed map[string]string) bool {
 	return !stringMapsEqual(want, observed)
 }
 
+// hasPortsDrift reports whether declared ports diverge from the running
+// pod. Nil and empty both mean "unmanaged": an empty value could never be
+// pushed to the API anyway (payloads use omitempty).
 func hasPortsDrift(desired []v1alpha1.Port, observed []string) bool {
 	if len(desired) == 0 {
 		return false
@@ -396,10 +399,14 @@ func resolveConnectionTarget(ports []v1alpha1.Port, podID, publicIP string, mapp
 	return "", fallback
 }
 
+// normalizePortToken builds a "<port>/<protocol>" token from spec fields;
+// the protocol is always appended, defaulting to tcp when unset.
 func normalizePortToken(number int32, protocol string) string {
 	return fmt.Sprintf("%d/%s", number, normalizeProtocol(protocol))
 }
 
+// normalizeObservedToken parses a RunPod "<port>/<protocol>" token; a
+// missing protocol segment defaults to tcp.
 func normalizeObservedToken(token string) string {
 	parts := strings.SplitN(strings.ToLower(token), "/", 2)
 	if len(parts) == 1 {
@@ -408,6 +415,7 @@ func normalizeObservedToken(token string) string {
 	return fmt.Sprintf("%s/%s", parts[0], normalizeProtocol(parts[1]))
 }
 
+// normalizeProtocol lowercases the protocol, defaulting empty to tcp.
 func normalizeProtocol(protocol string) string {
 	if protocol == "" {
 		return "tcp"

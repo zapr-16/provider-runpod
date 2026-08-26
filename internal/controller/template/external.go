@@ -49,6 +49,8 @@ func (e *external) Observe(ctx context.Context, mg xpresource.Managed) (managed.
 		TemplateID: response.ID,
 		Name:       response.Name,
 	}
+	// The RunPod API exposes no intermediate provisioning state for
+	// templates, so found == Available.
 	tmpl.SetConditions(xpv2.Available())
 	upToDate := !hasStandaloneTemplateDrift(tmpl.Spec.ForProvider, *response) &&
 		(tmpl.Spec.ForProvider.Name == nil || *tmpl.Spec.ForProvider.Name == response.Name)
@@ -254,10 +256,14 @@ func portTokensEqual(want, observed []string) bool {
 	return true
 }
 
+// normalizePortToken builds a "<port>/<protocol>" token from spec fields;
+// the protocol is always appended, defaulting to tcp when unset.
 func normalizePortToken(number int32, protocol string) string {
 	return fmt.Sprintf("%d/%s", number, normalizeProtocol(protocol))
 }
 
+// normalizeObservedToken parses a RunPod "<port>/<protocol>" token; a
+// missing protocol segment defaults to tcp.
 func normalizeObservedToken(token string) string {
 	parts := strings.SplitN(strings.ToLower(token), "/", 2)
 	if len(parts) == 1 {
@@ -266,6 +272,7 @@ func normalizeObservedToken(token string) string {
 	return fmt.Sprintf("%s/%s", parts[0], normalizeProtocol(parts[1]))
 }
 
+// normalizeProtocol lowercases the protocol, defaulting empty to tcp.
 func normalizeProtocol(protocol string) string {
 	if protocol == "" {
 		return "tcp"

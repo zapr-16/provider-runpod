@@ -40,6 +40,7 @@ func (e *external) Observe(ctx context.Context, mg xpresource.Managed) (managed.
 		return managed.ExternalObservation{}, errors.Wrap(err, errGetNetworkVolume)
 	}
 	if !found {
+		e.log.Info("NetworkVolume not found in RunPod API", "external-name", externalName)
 		return managed.ExternalObservation{ResourceExists: false}, nil
 	}
 	nv.Status.AtProvider = v1alpha1.NetworkVolumeObservation{
@@ -48,6 +49,8 @@ func (e *external) Observe(ctx context.Context, mg xpresource.Managed) (managed.
 		Size:            response.Size,
 		DataCenterID:    response.DataCenterID,
 	}
+	// The RunPod API exposes no intermediate provisioning state for network
+	// volumes, so found == Available.
 	nv.SetConditions(xpv2.Available())
 	upToDate := response.Size == nv.Spec.ForProvider.Size &&
 		(nv.Spec.ForProvider.Name == nil || *nv.Spec.ForProvider.Name == response.Name)
