@@ -26,6 +26,10 @@ const (
 	errNoImageName    = "imageName must be set when templateId is not set"
 	errRecycleWorkers = "cannot recycle endpoint workers after template change"
 
+	// logKeyTemplateID is the structured-logging key used to annotate log
+	// lines with the RunPod template ID backing an Endpoint.
+	logKeyTemplateID = "template-id"
+
 	// dataPlaneBaseURL is the serverless data plane, distinct from the REST
 	// control plane the client talks to. Unlike pod proxy URLs, every request
 	// to it requires an Authorization: Bearer <RunPod API key> header.
@@ -144,7 +148,7 @@ func (e *external) Create(ctx context.Context, mg xpresource.Managed) (managed.E
 		// template we just made; a leaked template costs nothing, so a
 		// cleanup failure is logged rather than returned.
 		if derr := e.client.DeleteTemplate(ctx, templateID); derr != nil {
-			e.log.Info("could not clean up template after failed endpoint create", "template-id", templateID, "error", derr)
+			e.log.Info("could not clean up template after failed endpoint create", logKeyTemplateID, templateID, "error", derr)
 		}
 		return managed.ExternalCreation{}, errors.Wrap(err, errCreateEndpoint)
 	}
@@ -225,7 +229,7 @@ func (e *external) Update(ctx context.Context, mg xpresource.Managed) (managed.E
 		return managed.ExternalUpdate{}, errors.Wrap(err, errGetTemplate)
 	}
 	if !found {
-		e.log.Info("template backing endpoint not found during update; skipping template patch", "template-id", templateID)
+		e.log.Info("template backing endpoint not found during update; skipping template patch", logKeyTemplateID, templateID)
 		return managed.ExternalUpdate{}, nil
 	}
 	if !hasTemplateDrift(spec, *current) {
@@ -310,7 +314,7 @@ func (e *external) Delete(ctx context.Context, mg xpresource.Managed) (managed.E
 		// the RunPod console if manual cleanup is ever needed, so template
 		// cleanup failures never block endpoint deletion.
 		if err := e.client.DeleteTemplate(ctx, templateID); err != nil {
-			e.log.Info("could not delete template backing endpoint", "template-id", templateID, "error", err)
+			e.log.Info("could not delete template backing endpoint", logKeyTemplateID, templateID, "error", err)
 		}
 	}
 

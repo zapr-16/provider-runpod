@@ -26,6 +26,9 @@ const (
 	errDoRequest          = "cannot execute RunPod request"
 	errDecodeResponse     = "cannot decode RunPod response"
 	errInvalidResourceID  = "invalid RunPod resource identifier"
+
+	podsPath       = "/pods"
+	podsPathPrefix = podsPath + "/"
 )
 
 // resourceIDPattern matches RunPod resource identifiers (pod, endpoint, and
@@ -213,7 +216,7 @@ func ClientFromClusterProviderConfig(ctx context.Context, kube client.Client, pc
 // other status is treated as a transient failure (rate limiting, an outage,
 // ...) rather than a credentials problem.
 func (c *Client) Ping(ctx context.Context) error {
-	req, err := c.NewRequest(ctx, http.MethodGet, "/pods", nil)
+	req, err := c.NewRequest(ctx, http.MethodGet, podsPath, nil)
 	if err != nil {
 		return errors.Wrap(err, errCreateRequest)
 	}
@@ -230,7 +233,7 @@ func (c *Client) Ping(ctx context.Context) error {
 		return nil
 	}
 
-	return errors.Errorf("RunPod GET /pods returned status %d: %s", resp.StatusCode, readErrorBody(resp.Body))
+	return errors.Errorf("RunPod GET %s returned status %d: %s", podsPath, resp.StatusCode, readErrorBody(resp.Body))
 }
 
 // GetPod retrieves a pod observation payload from the RunPod API. Only a
@@ -242,7 +245,7 @@ func (c *Client) GetPod(ctx context.Context, podID string) (*PodResponse, bool, 
 		return nil, false, err
 	}
 
-	req, err := c.NewRequest(ctx, http.MethodGet, "/pods/"+podID+"?includeMachine=true", nil)
+	req, err := c.NewRequest(ctx, http.MethodGet, podsPathPrefix+podID+"?includeMachine=true", nil)
 	if err != nil {
 		return nil, false, errors.Wrap(err, errCreateRequest)
 	}
@@ -259,7 +262,7 @@ func (c *Client) GetPod(ctx context.Context, podID string) (*PodResponse, bool, 
 		return nil, false, nil
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, false, errors.Errorf("RunPod GET /pods/%s returned status %d: %s", podID, resp.StatusCode, readErrorBody(resp.Body))
+		return nil, false, errors.Errorf("RunPod GET %s returned status %d: %s", podsPathPrefix+podID, resp.StatusCode, readErrorBody(resp.Body))
 	}
 
 	var out PodResponse
@@ -277,7 +280,7 @@ func (c *Client) CreatePod(ctx context.Context, payload CreatePodRequest) (strin
 		return "", errors.Wrap(err, errCreateRequest)
 	}
 
-	req, err := c.NewRequest(ctx, http.MethodPost, "/pods", bytes.NewReader(body))
+	req, err := c.NewRequest(ctx, http.MethodPost, podsPath, bytes.NewReader(body))
 	if err != nil {
 		return "", errors.Wrap(err, errCreateRequest)
 	}
@@ -291,7 +294,7 @@ func (c *Client) CreatePod(ctx context.Context, payload CreatePodRequest) (strin
 	}()
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return "", errors.Errorf("RunPod POST /pods returned status %d: %s", resp.StatusCode, readErrorBody(resp.Body))
+		return "", errors.Errorf("RunPod POST %s returned status %d: %s", podsPath, resp.StatusCode, readErrorBody(resp.Body))
 	}
 
 	var out PodResponse
@@ -310,7 +313,7 @@ func (c *Client) DeletePod(ctx context.Context, podID string) error {
 		return err
 	}
 
-	req, err := c.NewRequest(ctx, http.MethodDelete, "/pods/"+podID, nil)
+	req, err := c.NewRequest(ctx, http.MethodDelete, podsPathPrefix+podID, nil)
 	if err != nil {
 		return errors.Wrap(err, errCreateRequest)
 	}
@@ -327,7 +330,7 @@ func (c *Client) DeletePod(ctx context.Context, podID string) error {
 		return nil
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return errors.Errorf("RunPod DELETE /pods/%s returned status %d: %s", podID, resp.StatusCode, readErrorBody(resp.Body))
+		return errors.Errorf("RunPod DELETE %s returned status %d: %s", podsPathPrefix+podID, resp.StatusCode, readErrorBody(resp.Body))
 	}
 
 	return nil
@@ -339,7 +342,7 @@ func (c *Client) UpdatePod(ctx context.Context, podID string, payload UpdatePodR
 	if err := validateResourceID(podID); err != nil {
 		return err
 	}
-	return c.doJSON(ctx, http.MethodPatch, "/pods/"+podID, payload, nil)
+	return c.doJSON(ctx, http.MethodPatch, podsPathPrefix+podID, payload, nil)
 }
 
 // StartPod starts or resumes a stopped pod (POST /pods/{podId}/start).
@@ -357,7 +360,7 @@ func (c *Client) podAction(ctx context.Context, podID, action string) error {
 	if err := validateResourceID(podID); err != nil {
 		return err
 	}
-	req, err := c.NewRequest(ctx, http.MethodPost, "/pods/"+podID+"/"+action, nil)
+	req, err := c.NewRequest(ctx, http.MethodPost, podsPathPrefix+podID+"/"+action, nil)
 	if err != nil {
 		return errors.Wrap(err, errCreateRequest)
 	}
@@ -369,7 +372,7 @@ func (c *Client) podAction(ctx context.Context, podID, action string) error {
 		_ = resp.Body.Close()
 	}()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return errors.Errorf("RunPod POST /pods/%s/%s returned status %d: %s", podID, action, resp.StatusCode, readErrorBody(resp.Body))
+		return errors.Errorf("RunPod POST %s returned status %d: %s", podsPathPrefix+podID+"/"+action, resp.StatusCode, readErrorBody(resp.Body))
 	}
 	return nil
 }

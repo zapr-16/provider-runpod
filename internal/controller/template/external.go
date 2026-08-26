@@ -232,7 +232,7 @@ func buildPortTokens(in []v1alpha1.Port) []string {
 
 // portTokensEqual compares two port-token slices as sets, since the RunPod
 // API does not guarantee ordering.
-func portTokensEqual(want []string, observed []string) bool {
+func portTokensEqual(want, observed []string) bool {
 	wantSet := map[string]struct{}{}
 	for _, token := range want {
 		wantSet[normalizeObservedToken(token)] = struct{}{}
