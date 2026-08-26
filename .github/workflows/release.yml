@@ -4,6 +4,14 @@ on:
   push:
     tags:
       - "v*"
+  # Re-run the xpkg publish for an existing tag (e.g. when the package push
+  # failed or was added after the tag). Skips the GoReleaser job.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to build and push the .xpkg for (e.g. v0.5.0)"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -13,6 +21,9 @@ permissions:
 # tag cannot inject code into a pipeline that holds a packages:write token.
 jobs:
   release:
+    # Tag pushes only: a workflow_dispatch re-run targets an existing tag
+    # whose GitHub release and controller images already exist.
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -50,3 +61,43 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  xpkg:
+    # Build and push the Crossplane package (.xpkg) that references the
+    # controller image GoReleaser publishes. Runs after the release job on
+    # tag pushes, or standalone via workflow_dispatch for an existing tag.
+    needs: release
+    if: always() && (needs.release.result == 'success' || needs.release.result == 'skipped')
+    runs-on: ubuntu-latest
+    env:
+      XPKG_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+
+      - name: Install Crossplane CLI
+        # Pinned version + checksum so a compromised release host cannot
+        # inject a binary into a pipeline holding a packages:write token.
+        run: |
+          curl -fsSL "https://releases.crossplane.io/stable/v2.4.0/bin/linux_amd64/crossplane" -o /usr/local/bin/crossplane
+          echo "dfe07a50bcd00bf2f21f5e290f6428d7d2287f0378f41fbb39c48b1c3aae782a  /usr/local/bin/crossplane" | sha256sum -c -
+          chmod +x /usr/local/bin/crossplane
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push .xpkg
+        run: |
+          make xpkg-build
+          make xpkg-push
