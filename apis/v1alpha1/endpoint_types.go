@@ -54,7 +54,12 @@ type EndpointParameters struct {
 	// Recycle running/idle workers after the implicit template changes
 	// (image/env/disk), by cycling workersMax through 0. Without this,
 	// FlashBoot standby workers keep serving the old template
-	// indefinitely. Defaults to true. Ignored in templateId mode.
+	// indefinitely. Defaults to true. Ignored in templateId mode. Recycling
+	// additionally requires workersMax to be set: it is both the value
+	// restored after the cycle and the value the next reconcile's endpoint
+	// PATCH will carry, so a transient restore failure self-heals on
+	// retry. When workersMax is unset, recycling is skipped (logged) rather
+	// than attempted, since there would be no safe value to restore to.
 	// +kubebuilder:default=true
 	// +optional
 	RecycleWorkersOnTemplateChange *bool `json:"recycleWorkersOnTemplateChange,omitempty"`

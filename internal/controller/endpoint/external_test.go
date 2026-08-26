@@ -744,6 +744,117 @@ func TestUpdate(t *testing.T) {
 		}
 	})
 
+	t.Run("NilWorkersMaxSkipsRecycleWithoutGetFallback", func(t *testing.T) {
+		// Template drifted and recycle is enabled, but spec.workersMax is
+		// nil: recycling must be skipped outright, with no GET /endpoints
+		// fallback and no workersMax PATCHes of any kind (runpod-final-review
+		// item 1 — a GET-fallback could "restore" to whatever workersMax
+		// happens to be observed, including 0 if a prior recycle failed
+		// mid-cycle).
+		var calls []string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls = append(calls, r.Method+" "+r.URL.Path)
+			switch {
+			case r.Method == http.MethodPatch && r.URL.Path == "/endpoints/ep-123":
+				_ = json.NewEncoder(w).Encode(map[string]string{"id": "ep-123"})
+			case r.Method == http.MethodGet && r.URL.Path == "/templates/tpl-xyz":
+				drifted := templateResponse()
+				drifted.ImageName = "runpod/worker-v1-vllm:old"
+				_ = json.NewEncoder(w).Encode(drifted)
+			case r.Method == http.MethodPatch && r.URL.Path == "/templates/tpl-xyz":
+				_ = json.NewEncoder(w).Encode(map[string]string{"id": "tpl-xyz"})
+			default:
+				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			}
+		}))
+		defer server.Close()
+
+		spec := matchingSpec()
+		spec.WorkersMax = nil
+
+		ep := &v1alpha1.Endpoint{
+			ObjectMeta: metav1.ObjectMeta{Name: "vllm-small"},
+			Spec:       v1alpha1.EndpointSpec{ForProvider: spec},
+			Status: v1alpha1.EndpointStatus{
+				AtProvider: v1alpha1.EndpointObservation{TemplateID: "tpl-xyz"},
+			},
+		}
+		meta.SetExternalName(ep, "ep-123")
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+		if _, err := e.Update(context.Background(), ep); err != nil {
+			t.Fatalf("Update() error = %v", err)
+		}
+
+		want := []string{"PATCH /endpoints/ep-123", "GET /templates/tpl-xyz", "PATCH /templates/tpl-xyz"}
+		if !reflect.DeepEqual(calls, want) {
+			t.Fatalf("Update() calls = %v, want %v (no recycle PATCHes, no GET fallback)", calls, want)
+		}
+	})
+
+	t.Run("RecycleRestoreFailureReturnsError", func(t *testing.T) {
+		// The second (restore) workersMax PATCH fails transiently. Update
+		// must propagate an error wrapping errRecycleWorkers, and calls must
+		// end at the failed restore attempt: the endpoint is left at
+		// workersMax:0, but since spec.workersMax is set, the next
+		// reconcile's endpoint PATCH will carry it and self-heal.
+		var calls []string
+		var endpointPatchCount int
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls = append(calls, r.Method+" "+r.URL.Path)
+			switch {
+			case r.Method == http.MethodPatch && r.URL.Path == "/endpoints/ep-123":
+				endpointPatchCount++
+				if endpointPatchCount == 3 {
+					// The restore PATCH (1st = spec patch, 2nd = zero, 3rd = restore).
+					w.WriteHeader(http.StatusInternalServerError)
+					return
+				}
+				_ = json.NewEncoder(w).Encode(map[string]string{"id": "ep-123"})
+			case r.Method == http.MethodGet && r.URL.Path == "/templates/tpl-xyz":
+				drifted := templateResponse()
+				drifted.ImageName = "runpod/worker-v1-vllm:old"
+				_ = json.NewEncoder(w).Encode(drifted)
+			case r.Method == http.MethodPatch && r.URL.Path == "/templates/tpl-xyz":
+				_ = json.NewEncoder(w).Encode(map[string]string{"id": "tpl-xyz"})
+			default:
+				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			}
+		}))
+		defer server.Close()
+
+		spec := matchingSpec()
+
+		ep := &v1alpha1.Endpoint{
+			ObjectMeta: metav1.ObjectMeta{Name: "vllm-small"},
+			Spec:       v1alpha1.EndpointSpec{ForProvider: spec},
+			Status: v1alpha1.EndpointStatus{
+				AtProvider: v1alpha1.EndpointObservation{TemplateID: "tpl-xyz"},
+			},
+		}
+		meta.SetExternalName(ep, "ep-123")
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+		_, err := e.Update(context.Background(), ep)
+		if err == nil {
+			t.Fatal("Update() error = nil, want non-nil")
+		}
+		if !strings.Contains(err.Error(), errRecycleWorkers) {
+			t.Fatalf("Update() error = %q, want wrapped %q", err.Error(), errRecycleWorkers)
+		}
+
+		want := []string{
+			"PATCH /endpoints/ep-123",
+			"GET /templates/tpl-xyz",
+			"PATCH /templates/tpl-xyz",
+			"PATCH /endpoints/ep-123",
+			"PATCH /endpoints/ep-123",
+		}
+		if !reflect.DeepEqual(calls, want) {
+			t.Fatalf("Update() calls = %v, want %v (ending at the failed restore)", calls, want)
+		}
+	})
+
 	t.Run("RecycleDisabledSkipsWorkersMaxCycling", func(t *testing.T) {
 		// Scenario 6: template drifted, but recycleWorkersOnTemplateChange
 		// is explicitly false -> no workersMax cycling PATCHes.

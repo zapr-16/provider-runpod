@@ -249,20 +249,20 @@ func (e *external) Update(ctx context.Context, mg xpresource.Managed) (managed.E
 // recycleWorkers cycles workersMax through 0 after an implicit template
 // change so live/idle workers (FlashBoot standby included) pick up the new
 // template; they never do so on their own. No-op when recycling is
-// explicitly disabled, or when there is no workersMax value to restore.
+// explicitly disabled. Only runs when spec.WorkersMax is set: that value is
+// what gets restored, and it is also what the next reconcile's endpoint
+// PATCH carries, so a transient restore failure self-heals on retry. There
+// is deliberately no GET-fallback to discover a restore value — if the
+// restore PATCH below then failed, a later reconcile would have no way to
+// tell "0 because we're mid-recycle" from "0 because that's the desired
+// state", and could permanently pin the endpoint at workersMax:0.
 func (e *external) recycleWorkers(ctx context.Context, externalName string, spec v1alpha1.EndpointParameters) error {
 	if spec.RecycleWorkersOnTemplateChange != nil && !*spec.RecycleWorkersOnTemplateChange {
 		return nil
 	}
 
-	restoreMax := spec.WorkersMax
-	if restoreMax == nil {
-		if response, found, err := e.client.GetEndpoint(ctx, externalName); err == nil && found {
-			restoreMax = &response.WorkersMax
-		}
-	}
-	if restoreMax == nil {
-		e.log.Info("skipping worker recycle: cannot determine workersMax to restore", "endpoint-id", externalName)
+	if spec.WorkersMax == nil {
+		e.log.Info("skipping worker recycle: spec.workersMax not set; set it to enable recycling", "endpoint-id", externalName)
 		return nil
 	}
 
@@ -270,7 +270,7 @@ func (e *external) recycleWorkers(ctx context.Context, externalName string, spec
 	if err := e.client.UpdateEndpoint(ctx, externalName, runpodclient.UpdateEndpointRequest{WorkersMax: &zero}); err != nil {
 		return errors.Wrap(err, errRecycleWorkers)
 	}
-	if err := e.client.UpdateEndpoint(ctx, externalName, runpodclient.UpdateEndpointRequest{WorkersMax: restoreMax}); err != nil {
+	if err := e.client.UpdateEndpoint(ctx, externalName, runpodclient.UpdateEndpointRequest{WorkersMax: spec.WorkersMax}); err != nil {
 		return errors.Wrap(err, errRecycleWorkers)
 	}
 	return nil
