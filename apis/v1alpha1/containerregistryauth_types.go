@@ -50,8 +50,11 @@ type ContainerRegistrySecretRef struct {
 
 // ContainerRegistryAuthObservation captures the observed state.
 type ContainerRegistryAuthObservation struct {
+	// RunPod container registry auth ID, mirrored from the external name.
 	ContainerRegistryAuthID string `json:"containerRegistryAuthId,omitempty"`
-	Name                    string `json:"name,omitempty"`
+
+	// Display name as reported by RunPod.
+	Name string `json:"name,omitempty"`
 }
 
 // ContainerRegistryAuthSpec defines the desired state of a RunPod
@@ -73,6 +76,10 @@ type ContainerRegistryAuthStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Namespaced,categories=crossplane
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
+// +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
+// +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 type ContainerRegistryAuth struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

@@ -16,7 +16,20 @@ spec:
     singular: template
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .status.conditions[?(@.type=='Ready')].status
+      name: READY
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='Synced')].status
+      name: SYNCED
+      type: string
+    - jsonPath: .metadata.annotations.crossplane\.io/external-name
+      name: EXTERNAL-NAME
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: AGE
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: A Template is a standalone managed RunPod template.
@@ -75,8 +88,10 @@ spec:
                         the pod container.
                       properties:
                         name:
+                          description: Name of the environment variable.
                           type: string
                         value:
+                          description: Value assigned to the environment variable.
                           type: string
                       required:
                       - name
@@ -103,9 +118,12 @@ spec:
                       description: Port defines a container port exposed by the pod.
                       properties:
                         number:
+                          description: Number is the container port to expose.
                           format: int32
                           type: integer
                         protocol:
+                          description: 'Protocol for the exposed port: tcp or http.
+                            Defaults to tcp.'
                           type: string
                       required:
                       - number
@@ -189,8 +207,10 @@ spec:
                   by RunPod.
                 properties:
                   name:
+                    description: Template name as reported by RunPod.
                     type: string
                   templateId:
+                    description: RunPod template ID, mirrored from the external name.
                     type: string
                 type: object
               conditions:

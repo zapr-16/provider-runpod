@@ -16,7 +16,20 @@ spec:
     singular: networkvolume
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .status.conditions[?(@.type=='Ready')].status
+      name: READY
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='Synced')].status
+      name: SYNCED
+      type: string
+    - jsonPath: .metadata.annotations.crossplane\.io/external-name
+      name: EXTERNAL-NAME
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: AGE
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: A NetworkVolume is a managed RunPod persistent storage volume.
@@ -133,12 +146,17 @@ spec:
                   returned by RunPod.
                 properties:
                   dataCenterId:
+                    description: Data center hosting the volume, as reported by RunPod.
                     type: string
                   name:
+                    description: Volume name as reported by RunPod.
                     type: string
                   networkVolumeId:
+                    description: RunPod network volume ID, mirrored from the external
+                      name.
                     type: string
                   size:
+                    description: Volume size in GB as reported by RunPod.
                     format: int32
                     type: integer
                 type: object
