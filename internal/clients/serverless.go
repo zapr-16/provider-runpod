@@ -34,6 +34,7 @@ type CreateTemplateRequest struct {
 
 // UpdateTemplateRequest mirrors the RunPod template PATCH payload.
 type UpdateTemplateRequest struct {
+	Name                    *string           `json:"name,omitempty"`
 	ImageName               *string           `json:"imageName,omitempty"`
 	Env                     map[string]string `json:"env,omitempty"`
 	ContainerDiskInGb       *int32            `json:"containerDiskInGb,omitempty"`

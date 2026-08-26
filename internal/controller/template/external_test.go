@@ -137,6 +137,24 @@ func TestObserve(t *testing.T) {
 				connection: managed.ConnectionDetails{"templateId": []byte("template-123")},
 			},
 		},
+		"NameDriftMarksNotUpToDate": {
+			externalName: "template-123",
+			spec: func() v1alpha1.TemplateParameters {
+				s := matchingTemplateSpec()
+				s.Name = ptrString("renamed")
+				return s
+			},
+			statusCode: http.StatusOK,
+			response:   readyTemplateResponse(), // name "vllm-base" (i.e. "old")
+			wantCalls:  1,
+			want: want{
+				exists:     true,
+				upToDate:   false,
+				id:         "template-123",
+				name:       "vllm-base",
+				connection: managed.ConnectionDetails{"templateId": []byte("template-123")},
+			},
+		},
 	}
 
 	for name, tc := range tests {
@@ -349,6 +367,34 @@ func TestUpdate(t *testing.T) {
 		}
 		if gotBody.ContainerDiskInGb == nil || *gotBody.ContainerDiskInGb != 30 {
 			t.Fatalf("Update() containerDiskInGb = %#v", gotBody.ContainerDiskInGb)
+		}
+	})
+
+	t.Run("PatchesNameWhenSet", func(t *testing.T) {
+		// Regression: a post-creation name edit must be PATCHable, or
+		// Observe's name-drift check makes ResourceUpToDate=false forever.
+		var gotBody runpodclient.UpdateTemplateRequest
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+				t.Fatalf("decode request: %v", err)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"id": "template-123"})
+		}))
+		defer server.Close()
+
+		spec := matchingTemplateSpec()
+		spec.Name = ptrString("renamed")
+		tmpl := &v1alpha1.Template{
+			Spec: v1alpha1.TemplateSpec{ForProvider: spec},
+		}
+		meta.SetExternalName(tmpl, "template-123")
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+		if _, err := e.Update(context.Background(), tmpl); err != nil {
+			t.Fatalf("Update() error = %v", err)
+		}
+		if gotBody.Name == nil || *gotBody.Name != "renamed" {
+			t.Fatalf("Update() name = %#v, want %q", gotBody.Name, "renamed")
 		}
 	})
 

@@ -79,7 +79,9 @@ func TestUpdateTemplateFullPayload(t *testing.T) {
 	authID := "auth-1"
 	volumeInGb := int32(20)
 	volumeMountPath := "/workspace"
+	newName := "renamed"
 	err := c.UpdateTemplate(context.Background(), "template-1", UpdateTemplateRequest{
+		Name:                    &newName,
 		DockerStartCmd:          []string{"python3", "handler.py"},
 		DockerEntrypoint:        []string{"/bin/sh", "-c"},
 		ContainerRegistryAuthID: &authID,
@@ -91,6 +93,9 @@ func TestUpdateTemplateFullPayload(t *testing.T) {
 		t.Fatalf("UpdateTemplate: %v", err)
 	}
 
+	if gotBody["name"] != "renamed" {
+		t.Fatalf("name not sent: %v", gotBody["name"])
+	}
 	if got, _ := gotBody["dockerStartCmd"].([]any); len(got) != 2 || got[0] != "python3" {
 		t.Fatalf("dockerStartCmd not sent: %v", gotBody["dockerStartCmd"])
 	}

@@ -108,6 +108,7 @@ func (e *external) Update(ctx context.Context, mg xpresource.Managed) (managed.E
 	spec := tmpl.Spec.ForProvider
 	imageName := spec.ImageName
 	payload := runpodclient.UpdateTemplateRequest{
+		Name:                    spec.Name,
 		ImageName:               &imageName,
 		Env:                     buildEnvMap(spec.Env),
 		ContainerDiskInGb:       spec.ContainerDiskInGb,
