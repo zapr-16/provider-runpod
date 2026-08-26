@@ -791,6 +791,49 @@ func TestUpdate(t *testing.T) {
 		}
 	})
 
+	t.Run("TemplateGetFailureDuringDriftCheckReturnsError", func(t *testing.T) {
+		// A transient GET /templates failure during the drift check must
+		// propagate as an error (retry semantics), not be silently treated
+		// as "no drift" — consistent with Observe's handling of the same
+		// call. No template PATCH or recycle PATCHes must fire.
+		var calls []string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls = append(calls, r.Method+" "+r.URL.Path)
+			switch {
+			case r.Method == http.MethodPatch && r.URL.Path == "/endpoints/ep-123":
+				_ = json.NewEncoder(w).Encode(map[string]string{"id": "ep-123"})
+			case r.Method == http.MethodGet && r.URL.Path == "/templates/tpl-xyz":
+				w.WriteHeader(http.StatusInternalServerError)
+			default:
+				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			}
+		}))
+		defer server.Close()
+
+		ep := &v1alpha1.Endpoint{
+			ObjectMeta: metav1.ObjectMeta{Name: "vllm-small"},
+			Spec:       v1alpha1.EndpointSpec{ForProvider: matchingSpec()},
+			Status: v1alpha1.EndpointStatus{
+				AtProvider: v1alpha1.EndpointObservation{TemplateID: "tpl-xyz"},
+			},
+		}
+		meta.SetExternalName(ep, "ep-123")
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+		_, err := e.Update(context.Background(), ep)
+		if err == nil {
+			t.Fatal("Update() error = nil, want non-nil")
+		}
+		if !strings.Contains(err.Error(), errGetTemplate) {
+			t.Fatalf("Update() error = %q, want wrapped %q", err.Error(), errGetTemplate)
+		}
+
+		want := []string{"PATCH /endpoints/ep-123", "GET /templates/tpl-xyz"}
+		if !reflect.DeepEqual(calls, want) {
+			t.Fatalf("Update() calls = %v, want %v (no template PATCH or recycle PATCHes)", calls, want)
+		}
+	})
+
 	t.Run("NoTemplateDriftSkipsTemplatePatchAndRecycle", func(t *testing.T) {
 		// Scenario 7: GET /templates shows the template already matches the
 		// spec -> no template PATCH, no recycle PATCHes.

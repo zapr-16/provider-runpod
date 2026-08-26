@@ -216,12 +216,19 @@ func (e *external) Update(ctx context.Context, mg xpresource.Managed) (managed.E
 	}
 
 	// Detect real template drift BEFORE patching so workers are only
-	// recycled when the template actually changed (runpod-rz0).
-	templateChanged := false
-	if current, found, err := e.client.GetTemplate(ctx, templateID); err == nil && found {
-		templateChanged = hasTemplateDrift(spec, *current)
+	// recycled when the template actually changed (runpod-rz0). A failure
+	// here must propagate (retry semantics) rather than be silently
+	// treated as "no drift", consistent with Observe's handling of the
+	// same call.
+	current, found, err := e.client.GetTemplate(ctx, templateID)
+	if err != nil {
+		return managed.ExternalUpdate{}, errors.Wrap(err, errGetTemplate)
 	}
-	if !templateChanged {
+	if !found {
+		e.log.Info("template backing endpoint not found during update; skipping template patch", "template-id", templateID)
+		return managed.ExternalUpdate{}, nil
+	}
+	if !hasTemplateDrift(spec, *current) {
 		return managed.ExternalUpdate{}, nil
 	}
 
