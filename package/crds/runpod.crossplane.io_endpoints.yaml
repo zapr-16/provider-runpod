@@ -51,13 +51,50 @@ spec:
                   RunPod template: Create provisions the template then the endpoint,
                   Delete removes both, and template drift is folded into endpoint drift.
                 properties:
+                  allowedCudaVersions:
+                    description: CUDA versions the workers are allowed to run on.
+                    items:
+                      type: string
+                    type: array
+                  computeType:
+                    description: |-
+                      Worker compute class: GPU or CPU. Create-only; RunPod does not allow
+                      changing an endpoint's compute type after creation, and it is absent
+                      from the PATCH schema.
+                    enum:
+                    - GPU
+                    - CPU
+                    type: string
                   containerDiskInGb:
                     description: Size of the ephemeral container disk in GiB (carried
                       by the template).
                     format: int32
                     type: integer
+                  containerRegistryAuthId:
+                    description: |-
+                      ID of the container registry credentials used to pull the image
+                      (carried by the template).
+                    type: string
+                  cpuFlavorIds:
+                    description: Ordered list of acceptable RunPod CPU flavor IDs
+                      for CPU endpoints.
+                    items:
+                      type: string
+                    type: array
                   dataCenterIds:
                     description: Restrict workers to specific RunPod data center IDs.
+                    items:
+                      type: string
+                    type: array
+                  dockerEntrypoint:
+                    description: Entrypoint overriding the image's default (carried
+                      by the template).
+                    items:
+                      type: string
+                    type: array
+                  dockerStartCmd:
+                    description: Command RunPod runs to start the container (carried
+                      by the template).
                     items:
                       type: string
                     type: array
@@ -109,10 +146,20 @@ spec:
                     description: Container image the serverless workers run, e.g.
                       runpod/worker-v1-vllm:stable.
                     type: string
+                  minCudaVersion:
+                    description: Minimum CUDA version required on the workers.
+                    type: string
                   networkVolumeId:
                     description: Network volume to attach to the workers, e.g. for
                       model weight caching.
                     type: string
+                  networkVolumeIds:
+                    description: |-
+                      Network volumes to attach to the workers, for multi-volume mounting.
+                      Mutually exclusive with networkVolumeId.
+                    items:
+                      type: string
+                    type: array
                   scalerType:
                     description: Autoscaling strategy, QUEUE_DELAY or REQUEST_COUNT.
                     enum:
@@ -123,6 +170,10 @@ spec:
                     description: |-
                       Threshold for the scaler: queue seconds for QUEUE_DELAY, queued
                       requests per worker for REQUEST_COUNT (RunPod default 4).
+                    format: int32
+                    type: integer
+                  vcpuCount:
+                    description: Number of vCPUs allocated per worker for CPU endpoints.
                     format: int32
                     type: integer
                   workersMax:
@@ -138,6 +189,9 @@ spec:
                 required:
                 - imageName
                 type: object
+                x-kubernetes-validations:
+                - message: networkVolumeId and networkVolumeIds are mutually exclusive
+                  rule: '!(has(self.networkVolumeId) && has(self.networkVolumeIds))'
               managementPolicies:
                 default:
                 - '*'

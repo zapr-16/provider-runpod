@@ -30,6 +30,7 @@ const (
 // serverless endpoint. The controller implicitly manages the backing
 // RunPod template: Create provisions the template then the endpoint,
 // Delete removes both, and template drift is folded into endpoint drift.
+// +kubebuilder:validation:XValidation:rule="!(has(self.networkVolumeId) && has(self.networkVolumeIds))",message="networkVolumeId and networkVolumeIds are mutually exclusive"
 type EndpointParameters struct {
 	// Container image the serverless workers run, e.g. runpod/worker-v1-vllm:stable.
 	ImageName string `json:"imageName"`
@@ -94,6 +95,48 @@ type EndpointParameters struct {
 	// Maximum milliseconds a single request may run on a worker.
 	// +optional
 	ExecutionTimeoutMs *int32 `json:"executionTimeoutMs,omitempty"`
+
+	// Worker compute class: GPU or CPU. Create-only; RunPod does not allow
+	// changing an endpoint's compute type after creation, and it is absent
+	// from the PATCH schema.
+	// +kubebuilder:validation:Enum=GPU;CPU
+	// +optional
+	// +immutable
+	ComputeType *string `json:"computeType,omitempty"`
+
+	// Number of vCPUs allocated per worker for CPU endpoints.
+	// +optional
+	VCPUCount *int32 `json:"vcpuCount,omitempty"`
+
+	// Ordered list of acceptable RunPod CPU flavor IDs for CPU endpoints.
+	// +optional
+	CPUFlavorIDs []string `json:"cpuFlavorIds,omitempty"`
+
+	// CUDA versions the workers are allowed to run on.
+	// +optional
+	AllowedCudaVersions []string `json:"allowedCudaVersions,omitempty"`
+
+	// Minimum CUDA version required on the workers.
+	// +optional
+	MinCudaVersion *string `json:"minCudaVersion,omitempty"`
+
+	// Network volumes to attach to the workers, for multi-volume mounting.
+	// Mutually exclusive with networkVolumeId.
+	// +optional
+	NetworkVolumeIDs []string `json:"networkVolumeIds,omitempty"`
+
+	// Command RunPod runs to start the container (carried by the template).
+	// +optional
+	DockerStartCmd []string `json:"dockerStartCmd,omitempty"`
+
+	// Entrypoint overriding the image's default (carried by the template).
+	// +optional
+	DockerEntrypoint []string `json:"dockerEntrypoint,omitempty"`
+
+	// ID of the container registry credentials used to pull the image
+	// (carried by the template).
+	// +optional
+	ContainerRegistryAuthID *string `json:"containerRegistryAuthId,omitempty"`
 }
 
 // EndpointObservation captures the observed state returned by RunPod.

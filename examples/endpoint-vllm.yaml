@@ -32,6 +32,32 @@ spec:
     flashBoot: true
     scalerType: QUEUE_DELAY
     scalerValue: 4
-    # networkVolumeId: ""  # optional, for model weight caching
+    # networkVolumeId: ""  # optional, for model weight caching (mutually exclusive with networkVolumeIds)
+    # networkVolumeIds:    # optional, multiple network volumes (mutually exclusive with networkVolumeId)
+    #   - "nv-abc123"
+    #   - "nv-def456"
+    # dataCenterIds:        # optional, restrict workers to specific data centers
+    #   - "US-CA-1"
+    #
+    # CPU endpoints (create-only; cannot switch GPU<->CPU after creation):
+    # computeType: CPU
+    # vcpuCount: 4
+    # cpuFlavorIds:
+    #   - "cpu3c"
+    #
+    # CUDA pinning for GPU endpoints:
+    # allowedCudaVersions:
+    #   - "12.1"
+    #   - "12.4"
+    # minCudaVersion: "11.8"
+    #
+    # Template-carried knobs (echoed by GET /templates, so drift is detected):
+    # dockerStartCmd:
+    #   - "python3"
+    #   - "handler.py"
+    # dockerEntrypoint:
+    #   - "/bin/sh"
+    #   - "-c"
+    # containerRegistryAuthId: "auth-id-from-a-ContainerRegistryAuth-resource"
   writeConnectionSecretToRef:
     name: vllm-small-conn

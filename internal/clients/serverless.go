@@ -64,34 +64,46 @@ type TemplateResponse struct {
 
 // CreateEndpointRequest mirrors the RunPod serverless endpoint create payload.
 type CreateEndpointRequest struct {
-	Name               *string  `json:"name,omitempty"`
-	TemplateID         string   `json:"templateId"`
-	GPUTypeIDs         []string `json:"gpuTypeIds,omitempty"`
-	GPUCount           *int32   `json:"gpuCount,omitempty"`
-	WorkersMin         *int32   `json:"workersMin,omitempty"`
-	WorkersMax         *int32   `json:"workersMax,omitempty"`
-	IdleTimeout        *int32   `json:"idleTimeout,omitempty"`
-	FlashBoot          *bool    `json:"flashboot,omitempty"`
-	ScalerType         *string  `json:"scalerType,omitempty"`
-	ScalerValue        *int32   `json:"scalerValue,omitempty"`
-	NetworkVolumeID    *string  `json:"networkVolumeId,omitempty"`
-	DataCenterIDs      []string `json:"dataCenterIds,omitempty"`
-	ExecutionTimeoutMs *int32   `json:"executionTimeoutMs,omitempty"`
+	Name                *string  `json:"name,omitempty"`
+	TemplateID          string   `json:"templateId"`
+	GPUTypeIDs          []string `json:"gpuTypeIds,omitempty"`
+	GPUCount            *int32   `json:"gpuCount,omitempty"`
+	WorkersMin          *int32   `json:"workersMin,omitempty"`
+	WorkersMax          *int32   `json:"workersMax,omitempty"`
+	IdleTimeout         *int32   `json:"idleTimeout,omitempty"`
+	FlashBoot           *bool    `json:"flashboot,omitempty"`
+	ScalerType          *string  `json:"scalerType,omitempty"`
+	ScalerValue         *int32   `json:"scalerValue,omitempty"`
+	NetworkVolumeID     *string  `json:"networkVolumeId,omitempty"`
+	DataCenterIDs       []string `json:"dataCenterIds,omitempty"`
+	ExecutionTimeoutMs  *int32   `json:"executionTimeoutMs,omitempty"`
+	ComputeType         *string  `json:"computeType,omitempty"`
+	VCPUCount           *int32   `json:"vcpuCount,omitempty"`
+	CPUFlavorIDs        []string `json:"cpuFlavorIds,omitempty"`
+	AllowedCudaVersions []string `json:"allowedCudaVersions,omitempty"`
+	MinCudaVersion      *string  `json:"minCudaVersion,omitempty"`
+	NetworkVolumeIDs    []string `json:"networkVolumeIds,omitempty"`
 }
 
 // UpdateEndpointRequest mirrors the RunPod serverless endpoint PATCH payload.
+// computeType is create-only and intentionally absent from this schema.
 type UpdateEndpointRequest struct {
-	GPUTypeIDs         []string `json:"gpuTypeIds,omitempty"`
-	GPUCount           *int32   `json:"gpuCount,omitempty"`
-	WorkersMin         *int32   `json:"workersMin,omitempty"`
-	WorkersMax         *int32   `json:"workersMax,omitempty"`
-	IdleTimeout        *int32   `json:"idleTimeout,omitempty"`
-	FlashBoot          *bool    `json:"flashboot,omitempty"`
-	ScalerType         *string  `json:"scalerType,omitempty"`
-	ScalerValue        *int32   `json:"scalerValue,omitempty"`
-	NetworkVolumeID    *string  `json:"networkVolumeId,omitempty"`
-	DataCenterIDs      []string `json:"dataCenterIds,omitempty"`
-	ExecutionTimeoutMs *int32   `json:"executionTimeoutMs,omitempty"`
+	GPUTypeIDs          []string `json:"gpuTypeIds,omitempty"`
+	GPUCount            *int32   `json:"gpuCount,omitempty"`
+	WorkersMin          *int32   `json:"workersMin,omitempty"`
+	WorkersMax          *int32   `json:"workersMax,omitempty"`
+	IdleTimeout         *int32   `json:"idleTimeout,omitempty"`
+	FlashBoot           *bool    `json:"flashboot,omitempty"`
+	ScalerType          *string  `json:"scalerType,omitempty"`
+	ScalerValue         *int32   `json:"scalerValue,omitempty"`
+	NetworkVolumeID     *string  `json:"networkVolumeId,omitempty"`
+	DataCenterIDs       []string `json:"dataCenterIds,omitempty"`
+	ExecutionTimeoutMs  *int32   `json:"executionTimeoutMs,omitempty"`
+	VCPUCount           *int32   `json:"vcpuCount,omitempty"`
+	CPUFlavorIDs        []string `json:"cpuFlavorIds,omitempty"`
+	AllowedCudaVersions []string `json:"allowedCudaVersions,omitempty"`
+	MinCudaVersion      *string  `json:"minCudaVersion,omitempty"`
+	NetworkVolumeIDs    []string `json:"networkVolumeIds,omitempty"`
 }
 
 // EndpointWorker is a worker entry in the endpoint observation; RunPod

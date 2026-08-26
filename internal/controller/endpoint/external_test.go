@@ -42,28 +42,34 @@ func readyResponse() *runpodclient.EndpointResponse {
 
 func templateResponse() *runpodclient.TemplateResponse {
 	return &runpodclient.TemplateResponse{
-		ID:                "tpl-xyz",
-		ImageName:         "runpod/worker-v1-vllm:stable",
-		IsServerless:      true,
-		Env:               map[string]string{"MODEL_NAME": "Qwen/Qwen2.5-Coder-7B-Instruct"},
-		ContainerDiskInGb: 30,
+		ID:                      "tpl-xyz",
+		ImageName:               "runpod/worker-v1-vllm:stable",
+		IsServerless:            true,
+		Env:                     map[string]string{"MODEL_NAME": "Qwen/Qwen2.5-Coder-7B-Instruct"},
+		ContainerDiskInGb:       30,
+		DockerStartCmd:          []string{"python", "run.py"},
+		DockerEntrypoint:        []string{"/bin/sh"},
+		ContainerRegistryAuthID: "auth-1",
 	}
 }
 
 func matchingSpec() v1alpha1.EndpointParameters {
 	scaler := v1alpha1.ScalerTypeQueueDelay
 	return v1alpha1.EndpointParameters{
-		ImageName:         "runpod/worker-v1-vllm:stable",
-		Env:               []v1alpha1.EnvVar{{Name: "MODEL_NAME", Value: "Qwen/Qwen2.5-Coder-7B-Instruct"}},
-		ContainerDiskInGb: ptrInt32(30),
-		GPUTypeIDs:        []string{"NVIDIA GeForce RTX 3090"},
-		GPUCount:          ptrInt32(1),
-		WorkersMin:        ptrInt32(0),
-		WorkersMax:        ptrInt32(2),
-		IdleTimeout:       ptrInt32(60),
-		FlashBoot:         ptrBool(true),
-		ScalerType:        &scaler,
-		ScalerValue:       ptrInt32(4),
+		ImageName:               "runpod/worker-v1-vllm:stable",
+		Env:                     []v1alpha1.EnvVar{{Name: "MODEL_NAME", Value: "Qwen/Qwen2.5-Coder-7B-Instruct"}},
+		ContainerDiskInGb:       ptrInt32(30),
+		GPUTypeIDs:              []string{"NVIDIA GeForce RTX 3090"},
+		GPUCount:                ptrInt32(1),
+		WorkersMin:              ptrInt32(0),
+		WorkersMax:              ptrInt32(2),
+		IdleTimeout:             ptrInt32(60),
+		FlashBoot:               ptrBool(true),
+		ScalerType:              &scaler,
+		ScalerValue:             ptrInt32(4),
+		DockerStartCmd:          []string{"python", "run.py"},
+		DockerEntrypoint:        []string{"/bin/sh"},
+		ContainerRegistryAuthID: ptrString("auth-1"),
 	}
 }
 
@@ -386,9 +392,20 @@ func TestCreate(t *testing.T) {
 		}))
 		defer server.Close()
 
+		spec := matchingSpec()
+		spec.ComputeType = ptrString("CPU")
+		spec.VCPUCount = ptrInt32(4)
+		spec.CPUFlavorIDs = []string{"cpu3c"}
+		spec.AllowedCudaVersions = []string{"12.1"}
+		spec.MinCudaVersion = ptrString("11.8")
+		spec.NetworkVolumeIDs = []string{"nv-1", "nv-2"}
+		spec.DockerStartCmd = []string{"python", "run.py"}
+		spec.DockerEntrypoint = []string{"/bin/sh"}
+		spec.ContainerRegistryAuthID = ptrString("auth-1")
+
 		ep := &v1alpha1.Endpoint{
 			ObjectMeta: metav1.ObjectMeta{Name: "vllm-small"},
-			Spec:       v1alpha1.EndpointSpec{ForProvider: matchingSpec()},
+			Spec:       v1alpha1.EndpointSpec{ForProvider: spec},
 		}
 
 		e := &external{client: newTestClient(t, server), log: logr.Discard()}
@@ -429,6 +446,33 @@ func TestCreate(t *testing.T) {
 		}
 		if gotEndpoint.ScalerType == nil || *gotEndpoint.ScalerType != "QUEUE_DELAY" {
 			t.Fatalf("Create() endpoint scalerType = %#v", gotEndpoint.ScalerType)
+		}
+		if gotEndpoint.ComputeType == nil || *gotEndpoint.ComputeType != "CPU" {
+			t.Fatalf("Create() endpoint computeType = %#v, want %q", gotEndpoint.ComputeType, "CPU")
+		}
+		if gotEndpoint.VCPUCount == nil || *gotEndpoint.VCPUCount != 4 {
+			t.Fatalf("Create() endpoint vcpuCount = %#v, want 4", gotEndpoint.VCPUCount)
+		}
+		if !reflect.DeepEqual(gotEndpoint.CPUFlavorIDs, []string{"cpu3c"}) {
+			t.Fatalf("Create() endpoint cpuFlavorIds = %#v", gotEndpoint.CPUFlavorIDs)
+		}
+		if !reflect.DeepEqual(gotEndpoint.AllowedCudaVersions, []string{"12.1"}) {
+			t.Fatalf("Create() endpoint allowedCudaVersions = %#v", gotEndpoint.AllowedCudaVersions)
+		}
+		if gotEndpoint.MinCudaVersion == nil || *gotEndpoint.MinCudaVersion != "11.8" {
+			t.Fatalf("Create() endpoint minCudaVersion = %#v", gotEndpoint.MinCudaVersion)
+		}
+		if !reflect.DeepEqual(gotEndpoint.NetworkVolumeIDs, []string{"nv-1", "nv-2"}) {
+			t.Fatalf("Create() endpoint networkVolumeIds = %#v", gotEndpoint.NetworkVolumeIDs)
+		}
+		if !reflect.DeepEqual(gotTemplate.DockerStartCmd, []string{"python", "run.py"}) {
+			t.Fatalf("Create() template dockerStartCmd = %#v", gotTemplate.DockerStartCmd)
+		}
+		if !reflect.DeepEqual(gotTemplate.DockerEntrypoint, []string{"/bin/sh"}) {
+			t.Fatalf("Create() template dockerEntrypoint = %#v", gotTemplate.DockerEntrypoint)
+		}
+		if gotTemplate.ContainerRegistryAuthID == nil || *gotTemplate.ContainerRegistryAuthID != "auth-1" {
+			t.Fatalf("Create() template containerRegistryAuthId = %#v", gotTemplate.ContainerRegistryAuthID)
 		}
 		wantDetails := managed.ConnectionDetails{
 			"endpointId": []byte("ep-created"),
@@ -514,9 +558,19 @@ func TestUpdate(t *testing.T) {
 		}))
 		defer server.Close()
 
+		spec := matchingSpec()
+		spec.VCPUCount = ptrInt32(4)
+		spec.CPUFlavorIDs = []string{"cpu3c"}
+		spec.AllowedCudaVersions = []string{"12.1"}
+		spec.MinCudaVersion = ptrString("11.8")
+		spec.NetworkVolumeIDs = []string{"nv-1", "nv-2"}
+		spec.DockerStartCmd = []string{"python", "run.py"}
+		spec.DockerEntrypoint = []string{"/bin/sh"}
+		spec.ContainerRegistryAuthID = ptrString("auth-1")
+
 		ep := &v1alpha1.Endpoint{
 			ObjectMeta: metav1.ObjectMeta{Name: "vllm-small"},
-			Spec:       v1alpha1.EndpointSpec{ForProvider: matchingSpec()},
+			Spec:       v1alpha1.EndpointSpec{ForProvider: spec},
 			Status: v1alpha1.EndpointStatus{
 				AtProvider: v1alpha1.EndpointObservation{TemplateID: "tpl-xyz"},
 			},
@@ -537,8 +591,32 @@ func TestUpdate(t *testing.T) {
 		if gotEndpoint.IdleTimeout == nil || *gotEndpoint.IdleTimeout != 60 {
 			t.Fatalf("Update() endpoint idleTimeout = %#v, want 60", gotEndpoint.IdleTimeout)
 		}
+		if gotEndpoint.VCPUCount == nil || *gotEndpoint.VCPUCount != 4 {
+			t.Fatalf("Update() endpoint vcpuCount = %#v, want 4", gotEndpoint.VCPUCount)
+		}
+		if !reflect.DeepEqual(gotEndpoint.CPUFlavorIDs, []string{"cpu3c"}) {
+			t.Fatalf("Update() endpoint cpuFlavorIds = %#v", gotEndpoint.CPUFlavorIDs)
+		}
+		if !reflect.DeepEqual(gotEndpoint.AllowedCudaVersions, []string{"12.1"}) {
+			t.Fatalf("Update() endpoint allowedCudaVersions = %#v", gotEndpoint.AllowedCudaVersions)
+		}
+		if gotEndpoint.MinCudaVersion == nil || *gotEndpoint.MinCudaVersion != "11.8" {
+			t.Fatalf("Update() endpoint minCudaVersion = %#v", gotEndpoint.MinCudaVersion)
+		}
+		if !reflect.DeepEqual(gotEndpoint.NetworkVolumeIDs, []string{"nv-1", "nv-2"}) {
+			t.Fatalf("Update() endpoint networkVolumeIds = %#v", gotEndpoint.NetworkVolumeIDs)
+		}
 		if gotTemplate.ImageName == nil || *gotTemplate.ImageName != "runpod/worker-v1-vllm:stable" {
 			t.Fatalf("Update() template imageName = %#v", gotTemplate.ImageName)
+		}
+		if !reflect.DeepEqual(gotTemplate.DockerStartCmd, []string{"python", "run.py"}) {
+			t.Fatalf("Update() template dockerStartCmd = %#v", gotTemplate.DockerStartCmd)
+		}
+		if !reflect.DeepEqual(gotTemplate.DockerEntrypoint, []string{"/bin/sh"}) {
+			t.Fatalf("Update() template dockerEntrypoint = %#v", gotTemplate.DockerEntrypoint)
+		}
+		if gotTemplate.ContainerRegistryAuthID == nil || *gotTemplate.ContainerRegistryAuthID != "auth-1" {
+			t.Fatalf("Update() template containerRegistryAuthId = %#v", gotTemplate.ContainerRegistryAuthID)
 		}
 	})
 
@@ -817,6 +895,31 @@ func TestHasEndpointDrift(t *testing.T) {
 			mutate: func(s *v1alpha1.EndpointParameters) { s.GPUTypeIDs = []string{} },
 			want:   false,
 		},
+		"ComputeTypeDoesNotDrift": {
+			// Write-only: the observation never echoes computeType.
+			mutate: func(s *v1alpha1.EndpointParameters) { s.ComputeType = ptrString("CPU") },
+			want:   false,
+		},
+		"VCPUCountDoesNotDrift": {
+			mutate: func(s *v1alpha1.EndpointParameters) { s.VCPUCount = ptrInt32(4) },
+			want:   false,
+		},
+		"CPUFlavorIDsDoNotDrift": {
+			mutate: func(s *v1alpha1.EndpointParameters) { s.CPUFlavorIDs = []string{"cpu3c"} },
+			want:   false,
+		},
+		"AllowedCudaVersionsDoNotDrift": {
+			mutate: func(s *v1alpha1.EndpointParameters) { s.AllowedCudaVersions = []string{"12.1"} },
+			want:   false,
+		},
+		"MinCudaVersionDoesNotDrift": {
+			mutate: func(s *v1alpha1.EndpointParameters) { s.MinCudaVersion = ptrString("11.8") },
+			want:   false,
+		},
+		"NetworkVolumeIDsDoNotDrift": {
+			mutate: func(s *v1alpha1.EndpointParameters) { s.NetworkVolumeIDs = []string{"nv-1"} },
+			want:   false,
+		},
 	}
 
 	for name, tc := range tests {
@@ -864,6 +967,27 @@ func TestHasTemplateDrift(t *testing.T) {
 			mutate: func(s *v1alpha1.EndpointParameters) { s.Env = []v1alpha1.EnvVar{} },
 			want:   false,
 		},
+		"DockerStartCmdDrifts": {
+			// Order-sensitive: same elements, different order still drifts.
+			mutate: func(s *v1alpha1.EndpointParameters) { s.DockerStartCmd = []string{"run.py", "python"} },
+			want:   true,
+		},
+		"DockerEntrypointDrifts": {
+			mutate: func(s *v1alpha1.EndpointParameters) { s.DockerEntrypoint = []string{"other"} },
+			want:   true,
+		},
+		"ContainerRegistryAuthIDDrifts": {
+			mutate: func(s *v1alpha1.EndpointParameters) { s.ContainerRegistryAuthID = ptrString("other-auth") },
+			want:   true,
+		},
+		"NilDockerAndAuthFieldsDoNotDrift": {
+			mutate: func(s *v1alpha1.EndpointParameters) {
+				s.DockerStartCmd = nil
+				s.DockerEntrypoint = nil
+				s.ContainerRegistryAuthID = nil
+			},
+			want: false,
+		},
 	}
 
 	for name, tc := range tests {
@@ -889,3 +1013,5 @@ func newTestClient(t *testing.T, server *httptest.Server) *runpodclient.Client {
 func ptrInt32(v int32) *int32 { return &v }
 
 func ptrBool(b bool) *bool { return &b }
+
+func ptrString(s string) *string { return &s }
