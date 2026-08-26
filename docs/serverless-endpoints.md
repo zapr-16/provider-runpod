@@ -202,3 +202,29 @@ tool definitions on every request):
   500. If you need vision, send non-streaming requests.
 - **RBAC**: connection-secret publishing needs `create/update/patch/delete`
   on secrets — `deploy/local/rbac.yaml` was updated accordingly.
+
+## API coverage fixes (2026-08)
+
+- **`templateId` reference mode.** `spec.forProvider.templateId` lets an
+  `Endpoint` point at an externally-owned template (e.g. a standalone
+  `Template` resource, or one shared across endpoints) instead of the
+  controller implicitly creating/owning one. `templateId` is mutually
+  exclusive with `imageName` and the other template-carried fields
+  (`env`, `containerDiskInGb`, `dockerStartCmd`, `dockerEntrypoint`,
+  `containerRegistryAuthId`) — enforced via CEL validation on the CRD. See
+  `examples/endpoint-from-template.yaml`. In this mode the controller never
+  creates, patches, or deletes the template.
+- **Automatic worker recycle on implicit-template changes.**
+  `recycleWorkersOnTemplateChange` (default `true`) makes the controller
+  recycle live workers (`workersMax: 0` then back to the spec value) after
+  a template-carried field changes and the template PATCH succeeds — closing
+  the gap where template env/image changes otherwise sit inert until a
+  worker naturally idles out. Only applies to the implicit-template path;
+  set it `false` to opt out.
+- **New endpoint fields**: CPU endpoints (`computeType`, `vcpuCount`,
+  `cpuFlavorIds`) for non-GPU serverless workloads; CUDA version pinning
+  (`allowedCudaVersions`, `minCudaVersion`); `networkVolumeIds` (plural) —
+  attach multiple network volumes to one endpoint, mutually exclusive with
+  the existing singular `networkVolumeId`; template-carried `dockerStartCmd`,
+  `dockerEntrypoint`, and `containerRegistryAuthId` are now passed through
+  to the implicit template alongside `imageName`/`env`/`containerDiskInGb`.

@@ -17,6 +17,6 @@ metadata:
       a Kubernetes Secret referenced from a ProviderConfig.
 spec:
   controller:
-    image: ghcr.io/zapr-16/provider-runpod:v0.4.0
+    image: ghcr.io/zapr-16/provider-runpod:v0.5.0
   crossplane:
     version: ">=v2.0.0-0"

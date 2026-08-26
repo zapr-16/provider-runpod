@@ -27,7 +27,7 @@ The provider ships as two OCI artifacts: a controller image and a
 Crossplane package (`.xpkg`) that references it. Install the package:
 
 ```bash
-crossplane xpkg install provider ghcr.io/zapr-16/provider-runpod:v0.4.0-pkg
+crossplane xpkg install provider ghcr.io/zapr-16/provider-runpod:v0.5.0-pkg
 ```
 
 (The `-pkg` suffix distinguishes the package from the raw controller
@@ -99,6 +99,13 @@ spec:
         protocol: http
 ```
 
+Most fields (image, env, disk sizes, ports, ...) are updated in place via
+`PATCH /pods/{podId}` — changes apply the next time the pod (re)starts.
+Set `spec.forProvider.desiredState: EXITED` to stop the pod (storage keeps
+billing while stopped, compute does not) and `RUNNING` (or leave it unset)
+to start/resume it; GPU type and interruptible are immutable and require
+replacement.
+
 ## Create a serverless Endpoint
 
 Serverless endpoints run autoscaled workers with scale-to-zero, billed
@@ -140,6 +147,78 @@ endpoint, see `opencode.json` in this repo: replace the
 the ID from `status.atProvider.endpointId` (or the `RUNPOD_ENDPOINT_ID`
 you chose), and export `RUNPOD_API_KEY` in your shell so `{env:RUNPOD_API_KEY}`
 resolves.
+
+## Create a NetworkVolume
+
+A `NetworkVolume` is persistent network storage that can be attached to
+pods or serverless endpoints for weight/model caching. Size can grow but
+never shrink. See `examples/networkvolume.yaml`.
+
+```yaml
+apiVersion: runpod.crossplane.io/v1alpha1
+kind: NetworkVolume
+metadata:
+  name: model-cache
+  namespace: default
+spec:
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
+  forProvider:
+    size: 50          # GB
+    dataCenterId: EU-RO-1
+```
+
+## Create a ContainerRegistryAuth
+
+A `ContainerRegistryAuth` registers private container registry credentials
+with RunPod so pods/endpoints can pull private images; reference the
+resulting `status.atProvider.containerRegistryAuthId` from
+`spec.forProvider.containerRegistryAuthId` on a `Pod`, `Endpoint`, or
+`Template`. See `examples/containerregistryauth.yaml`.
+
+```yaml
+apiVersion: runpod.crossplane.io/v1alpha1
+kind: ContainerRegistryAuth
+metadata:
+  name: ghcr
+  namespace: default
+spec:
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
+  forProvider:
+    credentialsSecretRef:
+      name: ghcr-creds
+```
+
+## Create a Template
+
+A `Template` is a standalone, referenceable serverless template — useful
+when several `Endpoint` resources should share one image/config, instead
+of each `Endpoint` implicitly owning its own template. Reference the
+resulting `status.atProvider.templateId` from an `Endpoint`'s
+`spec.forProvider.templateId` (see `examples/endpoint-from-template.yaml`).
+See `examples/template.yaml`.
+
+```yaml
+apiVersion: runpod.crossplane.io/v1alpha1
+kind: Template
+metadata:
+  name: vllm-base
+  namespace: default
+spec:
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
+  forProvider:
+    imageName: runpod/worker-v1-vllm:v2.25.2
+    isServerless: true
+    env:
+      - name: MODEL_NAME
+        value: "Qwen/Qwen2.5-Coder-7B-Instruct"
+    containerDiskInGb: 30
+```
 
 ## Docs
 
