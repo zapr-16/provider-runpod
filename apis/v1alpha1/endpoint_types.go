@@ -36,6 +36,7 @@ const (
 // +kubebuilder:validation:XValidation:rule="!(has(self.networkVolumeId) && has(self.networkVolumeIds))",message="networkVolumeId and networkVolumeIds are mutually exclusive"
 // +kubebuilder:validation:XValidation:rule="has(self.imageName) != has(self.templateId)",message="exactly one of imageName or templateId must be set"
 // +kubebuilder:validation:XValidation:rule="!has(self.templateId) || (!has(self.env) && !has(self.containerDiskInGb) && !has(self.dockerStartCmd) && !has(self.dockerEntrypoint) && !has(self.containerRegistryAuthId))",message="template-carried fields cannot be set together with templateId"
+// +kubebuilder:validation:XValidation:rule="has(self.templateId) == has(oldSelf.templateId)",message="cannot switch between imageName and templateId modes after creation"
 type EndpointParameters struct {
 	// Container image the serverless workers run, e.g. runpod/worker-v1-vllm:stable.
 	// Mutually exclusive with templateId.
@@ -173,7 +174,10 @@ type EndpointObservation struct {
 	// RunPod serverless endpoint ID, mirrored from the external name.
 	EndpointID string `json:"endpointId,omitempty"`
 
-	// ID of the implicitly managed RunPod template backing this endpoint.
+	// ID of the RunPod template backing this endpoint: in imageName mode,
+	// the template implicitly created and managed by this controller; in
+	// templateId mode, the externally-owned template referenced by
+	// spec.templateId.
 	TemplateID string `json:"templateId,omitempty"`
 
 	// Data-plane base URL (https://api.runpod.ai/v2/{endpointId}).

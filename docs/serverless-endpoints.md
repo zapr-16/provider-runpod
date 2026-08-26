@@ -228,3 +228,9 @@ tool definitions on every request):
   the existing singular `networkVolumeId`; template-carried `dockerStartCmd`,
   `dockerEntrypoint`, and `containerRegistryAuthId` are now passed through
   to the implicit template alongside `imageName`/`env`/`containerDiskInGb`.
+- **Endpoint mode is fixed at creation.** Whether an `Endpoint` uses
+  `imageName` (implicit template) or `templateId` (externally-owned
+  template) mode is locked in on creation and cannot be switched later — a
+  CEL transition rule on the CRD rejects any update that would toggle
+  which of the two fields is set, so a mode switch can't silently adopt
+  (and start managing) a template it doesn't own.

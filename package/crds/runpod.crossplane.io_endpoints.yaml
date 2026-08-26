@@ -170,7 +170,12 @@ spec:
                       Recycle running/idle workers after the implicit template changes
                       (image/env/disk), by cycling workersMax through 0. Without this,
                       FlashBoot standby workers keep serving the old template
-                      indefinitely. Defaults to true. Ignored in templateId mode.
+                      indefinitely. Defaults to true. Ignored in templateId mode. Recycling
+                      additionally requires workersMax to be set: it is both the value
+                      restored after the cycle and the value the next reconcile's endpoint
+                      PATCH will carry, so a transient restore failure self-heals on
+                      retry. When workersMax is unset, recycling is skipped (logged) rather
+                      than attempted, since there would be no safe value to restore to.
                     type: boolean
                   scalerType:
                     description: Autoscaling strategy, QUEUE_DELAY or REQUEST_COUNT.
@@ -217,6 +222,9 @@ spec:
                   rule: '!has(self.templateId) || (!has(self.env) && !has(self.containerDiskInGb)
                     && !has(self.dockerStartCmd) && !has(self.dockerEntrypoint) &&
                     !has(self.containerRegistryAuthId))'
+                - message: cannot switch between imageName and templateId modes after
+                    creation
+                  rule: has(self.templateId) == has(oldSelf.templateId)
               managementPolicies:
                 default:
                 - '*'
@@ -300,8 +308,11 @@ spec:
                       unlike pod proxy URLs, which are unauthenticated.
                     type: string
                   templateId:
-                    description: ID of the implicitly managed RunPod template backing
-                      this endpoint.
+                    description: |-
+                      ID of the RunPod template backing this endpoint: in imageName mode,
+                      the template implicitly created and managed by this controller; in
+                      templateId mode, the externally-owned template referenced by
+                      spec.templateId.
                     type: string
                   workersReady:
                     description: Number of workers currently in RUNNING state.
