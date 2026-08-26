@@ -42,6 +42,7 @@ func (e *external) Observe(ctx context.Context, mg xpresource.Managed) (managed.
 		return managed.ExternalObservation{}, errors.Wrap(err, errGetTemplate)
 	}
 	if !found {
+		e.log.Info("Template not found in RunPod API", "external-name", externalName)
 		return managed.ExternalObservation{ResourceExists: false}, nil
 	}
 	tmpl.Status.AtProvider = v1alpha1.TemplateObservation{
@@ -80,8 +81,8 @@ func (e *external) Create(ctx context.Context, mg xpresource.Managed) (managed.E
 		IsServerless:            isServerless,
 		Env:                     buildEnvMap(spec.Env),
 		ContainerDiskInGb:       spec.ContainerDiskInGb,
-		DockerStartCmd:          spec.DockerStartCmd,
-		DockerEntrypoint:        spec.DockerEntrypoint,
+		DockerStartCmd:          cloneStrings(spec.DockerStartCmd),
+		DockerEntrypoint:        cloneStrings(spec.DockerEntrypoint),
 		ContainerRegistryAuthID: spec.ContainerRegistryAuthID,
 		Ports:                   buildPortTokens(spec.Ports),
 		VolumeInGb:              spec.VolumeInGb,
@@ -112,8 +113,8 @@ func (e *external) Update(ctx context.Context, mg xpresource.Managed) (managed.E
 		ImageName:               &imageName,
 		Env:                     buildEnvMap(spec.Env),
 		ContainerDiskInGb:       spec.ContainerDiskInGb,
-		DockerStartCmd:          spec.DockerStartCmd,
-		DockerEntrypoint:        spec.DockerEntrypoint,
+		DockerStartCmd:          cloneStrings(spec.DockerStartCmd),
+		DockerEntrypoint:        cloneStrings(spec.DockerEntrypoint),
 		ContainerRegistryAuthID: spec.ContainerRegistryAuthID,
 		Ports:                   buildPortTokens(spec.Ports),
 		VolumeInGb:              spec.VolumeInGb,
@@ -205,6 +206,15 @@ func buildEnvMap(in []v1alpha1.EnvVar) map[string]string {
 	for _, env := range in {
 		out[env.Name] = env.Value
 	}
+	return out
+}
+
+func cloneStrings(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]string, len(in))
+	copy(out, in)
 	return out
 }
 

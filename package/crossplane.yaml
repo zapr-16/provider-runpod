@@ -8,9 +8,10 @@ metadata:
     meta.crossplane.io/license: Apache-2.0
     meta.crossplane.io/description: |
       Crossplane provider that manages GPU compute on RunPod.io.
-      Exposes `Pod` (dedicated GPU pods) and `Endpoint` (serverless
-      autoscaled workers with scale-to-zero) resources, plus a
-      `ProviderConfig` for API-key credentials.
+      Exposes `Pod` (dedicated GPU pods), `Endpoint` (serverless
+      autoscaled workers with scale-to-zero), `NetworkVolume`,
+      `ContainerRegistryAuth`, and `Template` resources, plus
+      `ProviderConfig`/`ClusterProviderConfig` for API-key credentials.
     meta.crossplane.io/readme: |
       See https://github.com/zapr-16/provider-runpod for installation
       and usage.  Authentication is via RunPod API key supplied through

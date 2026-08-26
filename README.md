@@ -103,8 +103,11 @@ Most fields (image, env, disk sizes, ports, ...) are updated in place via
 `PATCH /pods/{podId}` — changes apply the next time the pod (re)starts.
 Set `spec.forProvider.desiredState: EXITED` to stop the pod (storage keeps
 billing while stopped, compute does not) and `RUNNING` (or leave it unset)
-to start/resume it; GPU type and interruptible are immutable and require
-replacement.
+to start/resume it; GPU type and interruptible are immutable at the RunPod
+API. Changing either after creation is surfaced as drift via
+`status.atProvider.driftDetected` rather than being automatically applied
+— the controller only replaces the pod if `spec.forProvider.recreateOnTerminate`
+also applies.
 
 ## Create a serverless Endpoint
 

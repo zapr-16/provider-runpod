@@ -155,6 +155,81 @@ func TestObserve(t *testing.T) {
 				connection: managed.ConnectionDetails{"templateId": []byte("template-123")},
 			},
 		},
+		"ReorderedPortsAreNotDrift": {
+			// Ports are compared as a set, since the RunPod API does not
+			// guarantee ordering in its response.
+			externalName: "template-123",
+			spec: func() v1alpha1.TemplateParameters {
+				s := matchingTemplateSpec()
+				s.Ports = []v1alpha1.Port{
+					{Number: 8888, Protocol: "http"},
+					{Number: 22, Protocol: "tcp"},
+				}
+				return s
+			},
+			statusCode: http.StatusOK,
+			response: func() *runpodclient.TemplateResponse {
+				r := readyTemplateResponse()
+				r.Ports = []string{"22/tcp", "8888/http"}
+				return r
+			}(),
+			wantCalls: 1,
+			want: want{
+				exists:     true,
+				upToDate:   true,
+				id:         "template-123",
+				name:       "vllm-base",
+				connection: managed.ConnectionDetails{"templateId": []byte("template-123")},
+			},
+		},
+		"DifferentPortIsDrift": {
+			externalName: "template-123",
+			spec: func() v1alpha1.TemplateParameters {
+				s := matchingTemplateSpec()
+				s.Ports = []v1alpha1.Port{
+					{Number: 8888, Protocol: "http"},
+					{Number: 22, Protocol: "tcp"},
+				}
+				return s
+			},
+			statusCode: http.StatusOK,
+			response: func() *runpodclient.TemplateResponse {
+				r := readyTemplateResponse()
+				r.Ports = []string{"22/tcp", "9999/http"}
+				return r
+			}(),
+			wantCalls: 1,
+			want: want{
+				exists:     true,
+				upToDate:   false,
+				id:         "template-123",
+				name:       "vllm-base",
+				connection: managed.ConnectionDetails{"templateId": []byte("template-123")},
+			},
+		},
+		"ReorderedDockerStartCmdIsDrift": {
+			// Unlike ports, dockerStartCmd is a command line: order matters.
+			externalName: "template-123",
+			spec: func() v1alpha1.TemplateParameters {
+				s := matchingTemplateSpec()
+				s.DockerStartCmd = []string{"python", "run.py"}
+				return s
+			},
+			statusCode: http.StatusOK,
+			response: func() *runpodclient.TemplateResponse {
+				r := readyTemplateResponse()
+				r.DockerStartCmd = []string{"run.py", "python"}
+				return r
+			}(),
+			wantCalls: 1,
+			want: want{
+				exists:     true,
+				upToDate:   false,
+				id:         "template-123",
+				name:       "vllm-base",
+				connection: managed.ConnectionDetails{"templateId": []byte("template-123")},
+			},
+		},
 	}
 
 	for name, tc := range tests {
