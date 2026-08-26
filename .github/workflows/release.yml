@@ -13,9 +13,10 @@ on:
         required: true
         type: string
 
+# Permissions are granted per job (least privilege); the workflow-level
+# default is read-only.
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 # Third-party actions are pinned to commit SHAs so a compromised or moved
 # tag cannot inject code into a pipeline that holds a packages:write token.
@@ -25,6 +26,9 @@ jobs:
     # whose GitHub release and controller images already exist.
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # GoReleaser creates the GitHub release
+      packages: write # controller images pushed to GHCR
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -69,6 +73,9 @@ jobs:
     needs: release
     if: always() && (needs.release.result == 'success' || needs.release.result == 'skipped')
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # .xpkg pushed to GHCR
     env:
       XPKG_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
@@ -86,7 +93,7 @@ jobs:
         # Pinned version + checksum so a compromised release host cannot
         # inject a binary into a pipeline holding a packages:write token.
         run: |
-          curl -fsSL "https://releases.crossplane.io/stable/v2.4.0/bin/linux_amd64/crossplane" -o /usr/local/bin/crossplane
+          curl --proto '=https' --tlsv1.2 -fsSL "https://releases.crossplane.io/stable/v2.4.0/bin/linux_amd64/crossplane" -o /usr/local/bin/crossplane
           echo "dfe07a50bcd00bf2f21f5e290f6428d7d2287f0378f41fbb39c48b1c3aae782a  /usr/local/bin/crossplane" | sha256sum -c -
           chmod +x /usr/local/bin/crossplane
 
