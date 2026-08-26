@@ -56,7 +56,7 @@ func templateResponse() *runpodclient.TemplateResponse {
 func matchingSpec() v1alpha1.EndpointParameters {
 	scaler := v1alpha1.ScalerTypeQueueDelay
 	return v1alpha1.EndpointParameters{
-		ImageName:               "runpod/worker-v1-vllm:stable",
+		ImageName:               ptrString("runpod/worker-v1-vllm:stable"),
 		Env:                     []v1alpha1.EnvVar{{Name: "MODEL_NAME", Value: "Qwen/Qwen2.5-Coder-7B-Instruct"}},
 		ContainerDiskInGb:       ptrInt32(30),
 		GPUTypeIDs:              []string{"NVIDIA GeForce RTX 3090"},
@@ -222,7 +222,7 @@ func TestObserve(t *testing.T) {
 			externalName: "ep-123",
 			spec: func() v1alpha1.EndpointParameters {
 				s := matchingSpec()
-				s.ImageName = "runpod/worker-v1-vllm:dev"
+				s.ImageName = ptrString("runpod/worker-v1-vllm:dev")
 				return s
 			},
 			statusCode: http.StatusOK,
@@ -244,7 +244,7 @@ func TestObserve(t *testing.T) {
 		"NilOptionalFieldsDoNotDrift": {
 			externalName: "ep-123",
 			spec: func() v1alpha1.EndpointParameters {
-				return v1alpha1.EndpointParameters{ImageName: "runpod/worker-v1-vllm:stable"}
+				return v1alpha1.EndpointParameters{ImageName: ptrString("runpod/worker-v1-vllm:stable")}
 			},
 			statusCode: http.StatusOK,
 			response:   readyResponse(),
@@ -255,6 +255,54 @@ func TestObserve(t *testing.T) {
 				readyStatus:  corev1.ConditionTrue,
 				endpointID:   "ep-123",
 				templateID:   "tpl-xyz",
+				runtime:      "https://api.runpod.ai/v2/ep-123",
+				openAI:       "https://api.runpod.ai/v2/ep-123/openai/v1",
+				workersReady: 1,
+				workersTotal: 2,
+				connection:   wantConnection(),
+			},
+		},
+		// Scenario 2: templateId mode skips the implicit-template drift GET
+		// entirely; drift is just observed.templateId vs spec.templateId.
+		"TemplateModeMatchingTemplateIDIsUpToDate": {
+			externalName: "ep-123",
+			spec: func() v1alpha1.EndpointParameters {
+				return v1alpha1.EndpointParameters{TemplateID: ptrString("tpl-xyz")}
+			},
+			statusCode: http.StatusOK,
+			response:   readyResponse(),
+			wantCalls:  1,
+			want: want{
+				exists:       true,
+				upToDate:     true,
+				readyStatus:  corev1.ConditionTrue,
+				endpointID:   "ep-123",
+				templateID:   "tpl-xyz",
+				runtime:      "https://api.runpod.ai/v2/ep-123",
+				openAI:       "https://api.runpod.ai/v2/ep-123/openai/v1",
+				workersReady: 1,
+				workersTotal: 2,
+				connection:   wantConnection(),
+			},
+		},
+		"TemplateModeMismatchedTemplateIDIsNotUpToDate": {
+			externalName: "ep-123",
+			spec: func() v1alpha1.EndpointParameters {
+				return v1alpha1.EndpointParameters{TemplateID: ptrString("tpl-new")}
+			},
+			statusCode: http.StatusOK,
+			response: func() *runpodclient.EndpointResponse {
+				r := readyResponse()
+				r.TemplateID = "tpl-old"
+				return r
+			}(),
+			wantCalls: 1,
+			want: want{
+				exists:       true,
+				upToDate:     false,
+				readyStatus:  corev1.ConditionTrue,
+				endpointID:   "ep-123",
+				templateID:   "tpl-old",
 				runtime:      "https://api.runpod.ai/v2/ep-123",
 				openAI:       "https://api.runpod.ai/v2/ep-123/openai/v1",
 				workersReady: 1,
@@ -491,7 +539,9 @@ func TestCreate(t *testing.T) {
 		defer server.Close()
 
 		e := &external{client: newTestClient(t, server), log: logr.Discard()}
-		_, err := e.Create(context.Background(), &v1alpha1.Endpoint{})
+		_, err := e.Create(context.Background(), &v1alpha1.Endpoint{
+			Spec: v1alpha1.EndpointSpec{ForProvider: v1alpha1.EndpointParameters{ImageName: ptrString("runpod/worker-v1-vllm:stable")}},
+		})
 		if err == nil {
 			t.Fatal("Create() error = nil, want non-nil")
 		}
@@ -518,7 +568,10 @@ func TestCreate(t *testing.T) {
 		defer server.Close()
 
 		e := &external{client: newTestClient(t, server), log: logr.Discard()}
-		_, err := e.Create(context.Background(), &v1alpha1.Endpoint{ObjectMeta: metav1.ObjectMeta{Name: "x"}})
+		_, err := e.Create(context.Background(), &v1alpha1.Endpoint{
+			ObjectMeta: metav1.ObjectMeta{Name: "x"},
+			Spec:       v1alpha1.EndpointSpec{ForProvider: v1alpha1.EndpointParameters{ImageName: ptrString("runpod/worker-v1-vllm:stable")}},
+		})
 		if err == nil {
 			t.Fatal("Create() error = nil, want non-nil")
 		}
@@ -529,31 +582,92 @@ func TestCreate(t *testing.T) {
 			t.Fatal("Create() did not clean up template after endpoint create failure")
 		}
 	})
+
+	t.Run("TemplateModeSkipsTemplateCreate", func(t *testing.T) {
+		// Scenario 1: POST /endpoints carries templateId "tpl-ext" and NO
+		// POST /templates happens.
+		var gotEndpoint runpodclient.CreateEndpointRequest
+		var calls []string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls = append(calls, r.Method+" "+r.URL.Path)
+			if r.Method == http.MethodPost && r.URL.Path == "/endpoints" {
+				if err := json.NewDecoder(r.Body).Decode(&gotEndpoint); err != nil {
+					t.Fatalf("decode endpoint request: %v", err)
+				}
+				_ = json.NewEncoder(w).Encode(map[string]string{"id": "ep-created"})
+				return
+			}
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}))
+		defer server.Close()
+
+		spec := v1alpha1.EndpointParameters{
+			TemplateID: ptrString("tpl-ext"),
+			WorkersMin: ptrInt32(0),
+			WorkersMax: ptrInt32(2),
+		}
+		ep := &v1alpha1.Endpoint{
+			ObjectMeta: metav1.ObjectMeta{Name: "vllm-from-template"},
+			Spec:       v1alpha1.EndpointSpec{ForProvider: spec},
+		}
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+		got, err := e.Create(context.Background(), ep)
+		if err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+
+		want := []string{"POST /endpoints"}
+		if !reflect.DeepEqual(calls, want) {
+			t.Fatalf("Create() calls = %v, want %v", calls, want)
+		}
+		if gotEndpoint.TemplateID != "tpl-ext" {
+			t.Fatalf("Create() endpoint templateId = %q, want %q", gotEndpoint.TemplateID, "tpl-ext")
+		}
+		if meta.GetExternalName(ep) != "ep-created" {
+			t.Fatalf("Create() external name = %q, want %q", meta.GetExternalName(ep), "ep-created")
+		}
+		if got.ConnectionDetails["endpointId"] == nil {
+			t.Fatal("Create() connection details missing endpointId")
+		}
+	})
 }
 
 func TestUpdate(t *testing.T) {
-	t.Run("PatchesEndpointAndTemplate", func(t *testing.T) {
+	t.Run("PatchesEndpointAndTemplateWhenDriftedAndRecyclesWorkers", func(t *testing.T) {
+		// Scenario 5: PATCH /endpoints -> GET /templates (drift check) ->
+		// PATCH /templates/{id} -> PATCH /endpoints{workersMax:0} ->
+		// PATCH /endpoints{workersMax:restore}.
 		var gotEndpoint runpodclient.UpdateEndpointRequest
 		var gotTemplate runpodclient.UpdateTemplateRequest
-		var paths []string
+		var endpointPatchBodies []runpodclient.UpdateEndpointRequest
+		var order []string
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodPatch {
-				t.Fatalf("unexpected method: %s %s", r.Method, r.URL.Path)
-			}
-			paths = append(paths, r.URL.Path)
-			switch r.URL.Path {
-			case "/endpoints/ep-123":
-				if err := json.NewDecoder(r.Body).Decode(&gotEndpoint); err != nil {
+			switch {
+			case r.Method == http.MethodPatch && r.URL.Path == "/endpoints/ep-123":
+				order = append(order, "PATCH /endpoints")
+				var body runpodclient.UpdateEndpointRequest
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 					t.Fatalf("decode endpoint patch: %v", err)
 				}
+				endpointPatchBodies = append(endpointPatchBodies, body)
+				if len(endpointPatchBodies) == 1 {
+					gotEndpoint = body
+				}
 				_ = json.NewEncoder(w).Encode(map[string]string{"id": "ep-123"})
-			case "/templates/tpl-xyz":
+			case r.Method == http.MethodGet && r.URL.Path == "/templates/tpl-xyz":
+				order = append(order, "GET /templates")
+				drifted := templateResponse()
+				drifted.ImageName = "runpod/worker-v1-vllm:old"
+				_ = json.NewEncoder(w).Encode(drifted)
+			case r.Method == http.MethodPatch && r.URL.Path == "/templates/tpl-xyz":
+				order = append(order, "PATCH /templates")
 				if err := json.NewDecoder(r.Body).Decode(&gotTemplate); err != nil {
 					t.Fatalf("decode template patch: %v", err)
 				}
 				_ = json.NewEncoder(w).Encode(map[string]string{"id": "tpl-xyz"})
 			default:
-				t.Fatalf("unexpected path: %s", r.URL.Path)
+				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 			}
 		}))
 		defer server.Close()
@@ -582,8 +696,18 @@ func TestUpdate(t *testing.T) {
 			t.Fatalf("Update() error = %v", err)
 		}
 
-		if !reflect.DeepEqual(paths, []string{"/endpoints/ep-123", "/templates/tpl-xyz"}) {
-			t.Fatalf("Update() patched paths = %v", paths)
+		wantOrder := []string{"PATCH /endpoints", "GET /templates", "PATCH /templates", "PATCH /endpoints", "PATCH /endpoints"}
+		if !reflect.DeepEqual(order, wantOrder) {
+			t.Fatalf("Update() call order = %v, want %v", order, wantOrder)
+		}
+		if len(endpointPatchBodies) != 3 {
+			t.Fatalf("Update() endpoint PATCH count = %d, want 3", len(endpointPatchBodies))
+		}
+		if got := endpointPatchBodies[1].WorkersMax; got == nil || *got != 0 {
+			t.Fatalf("Update() recycle first PATCH workersMax = %#v, want 0", got)
+		}
+		if got := endpointPatchBodies[2].WorkersMax; got == nil || *got != 2 {
+			t.Fatalf("Update() recycle restore PATCH workersMax = %#v, want 2", got)
 		}
 		if gotEndpoint.WorkersMax == nil || *gotEndpoint.WorkersMax != 2 {
 			t.Fatalf("Update() endpoint workersMax = %#v, want 2", gotEndpoint.WorkersMax)
@@ -620,6 +744,95 @@ func TestUpdate(t *testing.T) {
 		}
 	})
 
+	t.Run("RecycleDisabledSkipsWorkersMaxCycling", func(t *testing.T) {
+		// Scenario 6: template drifted, but recycleWorkersOnTemplateChange
+		// is explicitly false -> no workersMax cycling PATCHes.
+		var endpointPatchCount int
+		var templatePatched bool
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == http.MethodPatch && r.URL.Path == "/endpoints/ep-123":
+				endpointPatchCount++
+				_ = json.NewEncoder(w).Encode(map[string]string{"id": "ep-123"})
+			case r.Method == http.MethodGet && r.URL.Path == "/templates/tpl-xyz":
+				drifted := templateResponse()
+				drifted.ImageName = "runpod/worker-v1-vllm:old"
+				_ = json.NewEncoder(w).Encode(drifted)
+			case r.Method == http.MethodPatch && r.URL.Path == "/templates/tpl-xyz":
+				templatePatched = true
+				_ = json.NewEncoder(w).Encode(map[string]string{"id": "tpl-xyz"})
+			default:
+				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			}
+		}))
+		defer server.Close()
+
+		spec := matchingSpec()
+		spec.RecycleWorkersOnTemplateChange = ptrBool(false)
+
+		ep := &v1alpha1.Endpoint{
+			ObjectMeta: metav1.ObjectMeta{Name: "vllm-small"},
+			Spec:       v1alpha1.EndpointSpec{ForProvider: spec},
+			Status: v1alpha1.EndpointStatus{
+				AtProvider: v1alpha1.EndpointObservation{TemplateID: "tpl-xyz"},
+			},
+		}
+		meta.SetExternalName(ep, "ep-123")
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+		if _, err := e.Update(context.Background(), ep); err != nil {
+			t.Fatalf("Update() error = %v", err)
+		}
+		if !templatePatched {
+			t.Fatal("Update() did not patch template despite drift")
+		}
+		if endpointPatchCount != 1 {
+			t.Fatalf("Update() endpoint PATCH count = %d, want 1 (no recycle)", endpointPatchCount)
+		}
+	})
+
+	t.Run("NoTemplateDriftSkipsTemplatePatchAndRecycle", func(t *testing.T) {
+		// Scenario 7: GET /templates shows the template already matches the
+		// spec -> no template PATCH, no recycle PATCHes.
+		var endpointPatchCount int
+		var templatePatched bool
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == http.MethodPatch && r.URL.Path == "/endpoints/ep-123":
+				endpointPatchCount++
+				_ = json.NewEncoder(w).Encode(map[string]string{"id": "ep-123"})
+			case r.Method == http.MethodGet && r.URL.Path == "/templates/tpl-xyz":
+				_ = json.NewEncoder(w).Encode(templateResponse())
+			case r.Method == http.MethodPatch && r.URL.Path == "/templates/tpl-xyz":
+				templatePatched = true
+				_ = json.NewEncoder(w).Encode(map[string]string{"id": "tpl-xyz"})
+			default:
+				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			}
+		}))
+		defer server.Close()
+
+		ep := &v1alpha1.Endpoint{
+			ObjectMeta: metav1.ObjectMeta{Name: "vllm-small"},
+			Spec:       v1alpha1.EndpointSpec{ForProvider: matchingSpec()},
+			Status: v1alpha1.EndpointStatus{
+				AtProvider: v1alpha1.EndpointObservation{TemplateID: "tpl-xyz"},
+			},
+		}
+		meta.SetExternalName(ep, "ep-123")
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+		if _, err := e.Update(context.Background(), ep); err != nil {
+			t.Fatalf("Update() error = %v", err)
+		}
+		if templatePatched {
+			t.Fatal("Update() patched template despite no drift")
+		}
+		if endpointPatchCount != 1 {
+			t.Fatalf("Update() endpoint PATCH count = %d, want 1 (no recycle)", endpointPatchCount)
+		}
+	})
+
 	t.Run("MissingTemplateIDFallsBackToGet", func(t *testing.T) {
 		var templatePatched bool
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -628,6 +841,10 @@ func TestUpdate(t *testing.T) {
 				_ = json.NewEncoder(w).Encode(map[string]string{"id": "ep-123"})
 			case r.Method == http.MethodGet && r.URL.Path == "/endpoints/ep-123":
 				_ = json.NewEncoder(w).Encode(readyResponse())
+			case r.Method == http.MethodGet && r.URL.Path == "/templates/tpl-xyz":
+				drifted := templateResponse()
+				drifted.ImageName = "runpod/worker-v1-vllm:old"
+				_ = json.NewEncoder(w).Encode(drifted)
 			case r.Method == http.MethodPatch && r.URL.Path == "/templates/tpl-xyz":
 				templatePatched = true
 				_ = json.NewEncoder(w).Encode(map[string]string{"id": "tpl-xyz"})
@@ -649,6 +866,51 @@ func TestUpdate(t *testing.T) {
 		}
 		if !templatePatched {
 			t.Fatal("Update() did not patch template after GET fallback")
+		}
+	})
+
+	t.Run("TemplateModeUpdate", func(t *testing.T) {
+		// Scenario 3: templateId mode -> PATCH /endpoints carries templateId,
+		// no template PATCH/GET, no recycle.
+		var gotEndpoint runpodclient.UpdateEndpointRequest
+		var calls []string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls = append(calls, r.Method+" "+r.URL.Path)
+			if r.Method == http.MethodPatch && r.URL.Path == "/endpoints/ep-123" {
+				if err := json.NewDecoder(r.Body).Decode(&gotEndpoint); err != nil {
+					t.Fatalf("decode endpoint patch: %v", err)
+				}
+				_ = json.NewEncoder(w).Encode(map[string]string{"id": "ep-123"})
+				return
+			}
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}))
+		defer server.Close()
+
+		spec := v1alpha1.EndpointParameters{
+			TemplateID: ptrString("tpl-ext"),
+			WorkersMax: ptrInt32(2),
+		}
+		ep := &v1alpha1.Endpoint{
+			ObjectMeta: metav1.ObjectMeta{Name: "vllm-from-template"},
+			Spec:       v1alpha1.EndpointSpec{ForProvider: spec},
+			Status: v1alpha1.EndpointStatus{
+				AtProvider: v1alpha1.EndpointObservation{TemplateID: "tpl-ext"},
+			},
+		}
+		meta.SetExternalName(ep, "ep-123")
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+		if _, err := e.Update(context.Background(), ep); err != nil {
+			t.Fatalf("Update() error = %v", err)
+		}
+
+		want := []string{"PATCH /endpoints/ep-123"}
+		if !reflect.DeepEqual(calls, want) {
+			t.Fatalf("Update() calls = %v, want %v", calls, want)
+		}
+		if gotEndpoint.TemplateID == nil || *gotEndpoint.TemplateID != "tpl-ext" {
+			t.Fatalf("Update() endpoint templateId = %#v, want %q", gotEndpoint.TemplateID, "tpl-ext")
 		}
 	})
 
@@ -851,6 +1113,36 @@ func TestDelete(t *testing.T) {
 			t.Fatalf("Delete() HTTP calls = %d, want 0", calls)
 		}
 	})
+
+	t.Run("TemplateModeNeverDeletesReferencedTemplate", func(t *testing.T) {
+		// Scenario 4: DELETE /endpoints only — the referenced template MUST
+		// NOT be deleted, even though it is recorded in atProvider.
+		var paths []string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			paths = append(paths, r.Method+" "+r.URL.Path)
+			w.WriteHeader(http.StatusNoContent)
+		}))
+		defer server.Close()
+
+		ep := &v1alpha1.Endpoint{
+			Spec: v1alpha1.EndpointSpec{
+				ForProvider: v1alpha1.EndpointParameters{TemplateID: ptrString("tpl-ext")},
+			},
+			Status: v1alpha1.EndpointStatus{
+				AtProvider: v1alpha1.EndpointObservation{TemplateID: "tpl-ext"},
+			},
+		}
+		meta.SetExternalName(ep, "ep-123")
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+		if _, err := e.Delete(context.Background(), ep); err != nil {
+			t.Fatalf("Delete() error = %v", err)
+		}
+		want := []string{"DELETE /endpoints/ep-123"}
+		if !reflect.DeepEqual(paths, want) {
+			t.Fatalf("Delete() calls = %v, want %v", paths, want)
+		}
+	})
 }
 
 func TestHasEndpointDrift(t *testing.T) {
@@ -943,7 +1235,7 @@ func TestHasTemplateDrift(t *testing.T) {
 			want:   false,
 		},
 		"ImageDrifts": {
-			mutate: func(s *v1alpha1.EndpointParameters) { s.ImageName = "other:latest" },
+			mutate: func(s *v1alpha1.EndpointParameters) { s.ImageName = ptrString("other:latest") },
 			want:   true,
 		},
 		"EnvDrifts": {

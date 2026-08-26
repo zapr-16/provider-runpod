@@ -47,9 +47,12 @@ spec:
               forProvider:
                 description: |-
                   EndpointParameters define the desired state inputs for a RunPod
-                  serverless endpoint. The controller implicitly manages the backing
-                  RunPod template: Create provisions the template then the endpoint,
-                  Delete removes both, and template drift is folded into endpoint drift.
+                  serverless endpoint. By default (imageName set) the controller implicitly
+                  manages the backing RunPod template: Create provisions the template then
+                  the endpoint, Delete removes both, and template drift is folded into
+                  endpoint drift. In templateId mode, the endpoint instead references an
+                  existing template owned elsewhere, and the controller never creates,
+                  patches, or deletes any template.
                 properties:
                   allowedCudaVersions:
                     description: CUDA versions the workers are allowed to run on.
@@ -143,8 +146,9 @@ spec:
                     minimum: 1
                     type: integer
                   imageName:
-                    description: Container image the serverless workers run, e.g.
-                      runpod/worker-v1-vllm:stable.
+                    description: |-
+                      Container image the serverless workers run, e.g. runpod/worker-v1-vllm:stable.
+                      Mutually exclusive with templateId.
                     type: string
                   minCudaVersion:
                     description: Minimum CUDA version required on the workers.
@@ -160,6 +164,14 @@ spec:
                     items:
                       type: string
                     type: array
+                  recycleWorkersOnTemplateChange:
+                    default: true
+                    description: |-
+                      Recycle running/idle workers after the implicit template changes
+                      (image/env/disk), by cycling workersMax through 0. Without this,
+                      FlashBoot standby workers keep serving the old template
+                      indefinitely. Defaults to true. Ignored in templateId mode.
+                    type: boolean
                   scalerType:
                     description: Autoscaling strategy, QUEUE_DELAY or REQUEST_COUNT.
                     enum:
@@ -172,6 +184,15 @@ spec:
                       requests per worker for REQUEST_COUNT (RunPod default 4).
                     format: int32
                     type: integer
+                  templateId:
+                    description: |-
+                      Existing RunPod template to run the endpoint from, e.g. one managed
+                      by a Template resource. Mutually exclusive with imageName and the
+                      other template-carried fields (env, containerDiskInGb,
+                      dockerStartCmd, dockerEntrypoint, containerRegistryAuthId): when
+                      templateId is set the controller does NOT create, patch, or delete
+                      any template — the referenced template is owned elsewhere.
+                    type: string
                   vcpuCount:
                     description: Number of vCPUs allocated per worker for CPU endpoints.
                     format: int32
@@ -186,12 +207,16 @@ spec:
                     format: int32
                     minimum: 0
                     type: integer
-                required:
-                - imageName
                 type: object
                 x-kubernetes-validations:
                 - message: networkVolumeId and networkVolumeIds are mutually exclusive
                   rule: '!(has(self.networkVolumeId) && has(self.networkVolumeIds))'
+                - message: exactly one of imageName or templateId must be set
+                  rule: has(self.imageName) != has(self.templateId)
+                - message: template-carried fields cannot be set together with templateId
+                  rule: '!has(self.templateId) || (!has(self.env) && !has(self.containerDiskInGb)
+                    && !has(self.dockerStartCmd) && !has(self.dockerEntrypoint) &&
+                    !has(self.containerRegistryAuthId))'
               managementPolicies:
                 default:
                 - '*'

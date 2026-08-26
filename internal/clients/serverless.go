@@ -88,6 +88,7 @@ type CreateEndpointRequest struct {
 // UpdateEndpointRequest mirrors the RunPod serverless endpoint PATCH payload.
 // computeType is create-only and intentionally absent from this schema.
 type UpdateEndpointRequest struct {
+	TemplateID          *string  `json:"templateId,omitempty"`
 	GPUTypeIDs          []string `json:"gpuTypeIds,omitempty"`
 	GPUCount            *int32   `json:"gpuCount,omitempty"`
 	WorkersMin          *int32   `json:"workersMin,omitempty"`

@@ -23,6 +23,8 @@ const (
 	errUpdateEndpoint = "cannot update endpoint via RunPod API"
 	errUpdateTemplate = "cannot update template via RunPod API"
 	errDeleteEndpoint = "cannot delete endpoint via RunPod API"
+	errNoImageName    = "imageName must be set when templateId is not set"
+	errRecycleWorkers = "cannot recycle endpoint workers after template change"
 
 	// dataPlaneBaseURL is the serverless data plane, distinct from the REST
 	// control plane the client talks to. Unlike pod proxy URLs, every request
@@ -70,7 +72,11 @@ func (e *external) Observe(ctx context.Context, mg xpresource.Managed) (managed.
 	ep.SetConditions(xpv2.Available())
 
 	upToDate := !hasEndpointDrift(ep.Spec.ForProvider, response)
-	if upToDate && response.TemplateID != "" {
+	if templateID := ep.Spec.ForProvider.TemplateID; templateID != nil {
+		// templateId mode: the referenced template is owned elsewhere, so
+		// drift is just "does the endpoint point at the right template".
+		upToDate = upToDate && response.TemplateID == *templateID
+	} else if upToDate && response.TemplateID != "" {
 		// The template embedded in the endpoint response omits imageName,
 		// so template drift needs a dedicated GET.
 		template, found, err := e.client.GetTemplate(ctx, response.TemplateID)
@@ -96,9 +102,31 @@ func (e *external) Create(ctx context.Context, mg xpresource.Managed) (managed.E
 	}
 
 	name := ep.GetName()
+
+	if ep.Spec.ForProvider.TemplateID != nil {
+		// templateId mode: the referenced template is owned elsewhere, so
+		// Create never provisions a template.
+		endpointID, err := e.client.CreateEndpoint(ctx, buildCreateEndpointRequest(&name, *ep.Spec.ForProvider.TemplateID, ep.Spec.ForProvider))
+		if err != nil {
+			return managed.ExternalCreation{}, errors.Wrap(err, errCreateEndpoint)
+		}
+
+		meta.SetExternalName(ep, endpointID)
+
+		return managed.ExternalCreation{
+			ConnectionDetails: connectionDetails(endpointID),
+		}, nil
+	}
+
+	if ep.Spec.ForProvider.ImageName == nil {
+		// Defensive: CEL enforces exactly one of imageName/templateId, so
+		// this should be unreachable in practice.
+		return managed.ExternalCreation{}, errors.New(errNoImageName)
+	}
+
 	templateID, err := e.client.CreateTemplate(ctx, runpodclient.CreateTemplateRequest{
 		Name:                    name,
-		ImageName:               ep.Spec.ForProvider.ImageName,
+		ImageName:               *ep.Spec.ForProvider.ImageName,
 		IsServerless:            true,
 		Env:                     buildEnvMap(ep.Spec.ForProvider.Env),
 		ContainerDiskInGb:       ep.Spec.ForProvider.ContainerDiskInGb,
@@ -140,7 +168,7 @@ func (e *external) Update(ctx context.Context, mg xpresource.Managed) (managed.E
 	}
 
 	spec := ep.Spec.ForProvider
-	if err := e.client.UpdateEndpoint(ctx, externalName, runpodclient.UpdateEndpointRequest{
+	endpointPatch := runpodclient.UpdateEndpointRequest{
 		GPUTypeIDs:          cloneStrings(spec.GPUTypeIDs),
 		GPUCount:            spec.GPUCount,
 		WorkersMin:          spec.WorkersMin,
@@ -157,8 +185,16 @@ func (e *external) Update(ctx context.Context, mg xpresource.Managed) (managed.E
 		AllowedCudaVersions: cloneStrings(spec.AllowedCudaVersions),
 		MinCudaVersion:      spec.MinCudaVersion,
 		NetworkVolumeIDs:    cloneStrings(spec.NetworkVolumeIDs),
-	}); err != nil {
+	}
+	if spec.TemplateID != nil {
+		endpointPatch.TemplateID = spec.TemplateID
+	}
+	if err := e.client.UpdateEndpoint(ctx, externalName, endpointPatch); err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, errUpdateEndpoint)
+	}
+	if spec.TemplateID != nil {
+		// Referenced template is owned elsewhere; nothing more to do.
+		return managed.ExternalUpdate{}, nil
 	}
 
 	// The implicit template is patched through the ID observed on the
@@ -179,8 +215,18 @@ func (e *external) Update(ctx context.Context, mg xpresource.Managed) (managed.E
 		return managed.ExternalUpdate{}, nil
 	}
 
+	// Detect real template drift BEFORE patching so workers are only
+	// recycled when the template actually changed (runpod-rz0).
+	templateChanged := false
+	if current, found, err := e.client.GetTemplate(ctx, templateID); err == nil && found {
+		templateChanged = hasTemplateDrift(spec, *current)
+	}
+	if !templateChanged {
+		return managed.ExternalUpdate{}, nil
+	}
+
 	if err := e.client.UpdateTemplate(ctx, templateID, runpodclient.UpdateTemplateRequest{
-		ImageName:               &spec.ImageName,
+		ImageName:               spec.ImageName,
 		Env:                     buildEnvMap(spec.Env),
 		ContainerDiskInGb:       spec.ContainerDiskInGb,
 		DockerStartCmd:          cloneStrings(spec.DockerStartCmd),
@@ -190,7 +236,37 @@ func (e *external) Update(ctx context.Context, mg xpresource.Managed) (managed.E
 		return managed.ExternalUpdate{}, errors.Wrap(err, errUpdateTemplate)
 	}
 
-	return managed.ExternalUpdate{}, nil
+	return managed.ExternalUpdate{}, e.recycleWorkers(ctx, externalName, spec)
+}
+
+// recycleWorkers cycles workersMax through 0 after an implicit template
+// change so live/idle workers (FlashBoot standby included) pick up the new
+// template; they never do so on their own. No-op when recycling is
+// explicitly disabled, or when there is no workersMax value to restore.
+func (e *external) recycleWorkers(ctx context.Context, externalName string, spec v1alpha1.EndpointParameters) error {
+	if spec.RecycleWorkersOnTemplateChange != nil && !*spec.RecycleWorkersOnTemplateChange {
+		return nil
+	}
+
+	restoreMax := spec.WorkersMax
+	if restoreMax == nil {
+		if response, found, err := e.client.GetEndpoint(ctx, externalName); err == nil && found {
+			restoreMax = &response.WorkersMax
+		}
+	}
+	if restoreMax == nil {
+		e.log.Info("skipping worker recycle: cannot determine workersMax to restore", "endpoint-id", externalName)
+		return nil
+	}
+
+	zero := int32(0)
+	if err := e.client.UpdateEndpoint(ctx, externalName, runpodclient.UpdateEndpointRequest{WorkersMax: &zero}); err != nil {
+		return errors.Wrap(err, errRecycleWorkers)
+	}
+	if err := e.client.UpdateEndpoint(ctx, externalName, runpodclient.UpdateEndpointRequest{WorkersMax: restoreMax}); err != nil {
+		return errors.Wrap(err, errRecycleWorkers)
+	}
+	return nil
 }
 
 func (e *external) Delete(ctx context.Context, mg xpresource.Managed) (managed.ExternalDelete, error) {
@@ -205,11 +281,16 @@ func (e *external) Delete(ctx context.Context, mg xpresource.Managed) (managed.E
 	}
 
 	// Resolve the implicit template before the endpoint disappears; the
-	// endpoint observation is the only durable record of its ID.
-	templateID := ep.Status.AtProvider.TemplateID
-	if templateID == "" {
-		if response, found, err := e.client.GetEndpoint(ctx, externalName); err == nil && found {
-			templateID = response.TemplateID
+	// endpoint observation is the only durable record of its ID. Skipped in
+	// templateId mode: the referenced template is owned elsewhere and must
+	// never be deleted by this controller.
+	var templateID string
+	if ep.Spec.ForProvider.TemplateID == nil {
+		templateID = ep.Status.AtProvider.TemplateID
+		if templateID == "" {
+			if response, found, err := e.client.GetEndpoint(ctx, externalName); err == nil && found {
+				templateID = response.TemplateID
+			}
 		}
 	}
 
@@ -293,7 +374,7 @@ func hasEndpointDrift(spec v1alpha1.EndpointParameters, observed *runpodclient.E
 // hasTemplateDrift reports whether the template-carried spec fields diverge
 // from the template embedded in the endpoint observation.
 func hasTemplateDrift(spec v1alpha1.EndpointParameters, observed runpodclient.TemplateResponse) bool {
-	if spec.ImageName != observed.ImageName {
+	if spec.ImageName != nil && *spec.ImageName != observed.ImageName {
 		return true
 	}
 	if spec.ContainerDiskInGb != nil && *spec.ContainerDiskInGb != observed.ContainerDiskInGb {

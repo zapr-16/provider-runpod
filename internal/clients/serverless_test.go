@@ -8,6 +8,33 @@ import (
 	"testing"
 )
 
+func TestUpdateEndpointRequestMarshalsZeroWorkersMax(t *testing.T) {
+	// A pointer to 0 must survive omitempty (only a nil pointer is omitted),
+	// so the workersMax:0 PATCH used to cycle workers during a template
+	// change actually reaches the RunPod API.
+	zero := int32(0)
+	body, err := json.Marshal(UpdateEndpointRequest{WorkersMax: &zero})
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if got := string(body); !containsWorkersMaxZero(got) {
+		t.Fatalf("Marshal() = %s, want it to contain \"workersMax\":0", got)
+	}
+}
+
+func containsWorkersMaxZero(body string) bool {
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(body), &decoded); err != nil {
+		return false
+	}
+	v, ok := decoded["workersMax"]
+	if !ok {
+		return false
+	}
+	f, ok := v.(float64)
+	return ok && f == 0
+}
+
 func TestCreateTemplateFullPayload(t *testing.T) {
 	var gotMethod, gotPath string
 	var gotBody map[string]any

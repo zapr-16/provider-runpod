@@ -27,13 +27,37 @@ const (
 )
 
 // EndpointParameters define the desired state inputs for a RunPod
-// serverless endpoint. The controller implicitly manages the backing
-// RunPod template: Create provisions the template then the endpoint,
-// Delete removes both, and template drift is folded into endpoint drift.
+// serverless endpoint. By default (imageName set) the controller implicitly
+// manages the backing RunPod template: Create provisions the template then
+// the endpoint, Delete removes both, and template drift is folded into
+// endpoint drift. In templateId mode, the endpoint instead references an
+// existing template owned elsewhere, and the controller never creates,
+// patches, or deletes any template.
 // +kubebuilder:validation:XValidation:rule="!(has(self.networkVolumeId) && has(self.networkVolumeIds))",message="networkVolumeId and networkVolumeIds are mutually exclusive"
+// +kubebuilder:validation:XValidation:rule="has(self.imageName) != has(self.templateId)",message="exactly one of imageName or templateId must be set"
+// +kubebuilder:validation:XValidation:rule="!has(self.templateId) || (!has(self.env) && !has(self.containerDiskInGb) && !has(self.dockerStartCmd) && !has(self.dockerEntrypoint) && !has(self.containerRegistryAuthId))",message="template-carried fields cannot be set together with templateId"
 type EndpointParameters struct {
 	// Container image the serverless workers run, e.g. runpod/worker-v1-vllm:stable.
-	ImageName string `json:"imageName"`
+	// Mutually exclusive with templateId.
+	// +optional
+	ImageName *string `json:"imageName,omitempty"`
+
+	// Existing RunPod template to run the endpoint from, e.g. one managed
+	// by a Template resource. Mutually exclusive with imageName and the
+	// other template-carried fields (env, containerDiskInGb,
+	// dockerStartCmd, dockerEntrypoint, containerRegistryAuthId): when
+	// templateId is set the controller does NOT create, patch, or delete
+	// any template — the referenced template is owned elsewhere.
+	// +optional
+	TemplateID *string `json:"templateId,omitempty"`
+
+	// Recycle running/idle workers after the implicit template changes
+	// (image/env/disk), by cycling workersMax through 0. Without this,
+	// FlashBoot standby workers keep serving the old template
+	// indefinitely. Defaults to true. Ignored in templateId mode.
+	// +kubebuilder:default=true
+	// +optional
+	RecycleWorkersOnTemplateChange *bool `json:"recycleWorkersOnTemplateChange,omitempty"`
 
 	// Environment variables injected into the workers (carried by the template).
 	// +optional
