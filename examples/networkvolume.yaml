@@ -1,0 +1,12 @@
+apiVersion: runpod.crossplane.io/v1alpha1
+kind: NetworkVolume
+metadata:
+  name: model-cache
+  namespace: default
+spec:
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
+  forProvider:
+    size: 50          # GB; can grow, never shrink
+    dataCenterId: EU-RO-1

@@ -26,6 +26,9 @@ const (
 	errParseStartedAt = "cannot parse pod lastStartedAt timestamp"
 	errCreatePod      = "cannot create pod via RunPod API"
 	errDeletePod      = "cannot delete pod via RunPod API"
+	errUpdatePod      = "cannot update pod via RunPod API"
+	errStartPod       = "cannot start pod via RunPod API"
+	errStopPod        = "cannot stop pod via RunPod API"
 
 	// logKeyExternalName is the structured-logging key used to annotate log
 	// lines with the RunPod external-name (pod ID).
@@ -129,6 +132,11 @@ func (e *external) Observe(ctx context.Context, mg xpresource.Managed) (managed.
 			pod.SetConditions(xpv2.Creating())
 		}
 	case "EXITED", "TERMINATED":
+		if response.DesiredStatus == "EXITED" && desiredStateOrDefault(pod.Spec.ForProvider) == "EXITED" {
+			// Stopped on purpose IS the desired state.
+			pod.SetConditions(xpv2.Available())
+			break
+		}
 		pod.SetConditions(xpv2.Unavailable())
 		// Spot reclaim / OOM / manual console delete all leave the pod
 		// stuck here forever unless we explicitly tell Crossplane the
@@ -155,11 +163,12 @@ func (e *external) Observe(ctx context.Context, mg xpresource.Managed) (managed.
 		pod.SetConditions(xpv2.Unavailable())
 	}
 
-	// RunPod pods are immutable, so drift can never be reconciled in place:
-	// reporting not-up-to-date would make the reconciler call the no-op
-	// Update() on every poll forever. Surface drift via status instead.
-	pod.Status.AtProvider.DriftDetected = hasEnvDrift(pod.Spec.ForProvider.Env, response.Env) ||
-		hasPortsDrift(pod.Spec.ForProvider.Ports, response.Ports)
+	// Immutable spec fields can never be reconciled in place; surface their
+	// drift via status only. Mutable-field drift and lifecycle drift are
+	// reconciled by Update() via PATCH + start/stop.
+	pod.Status.AtProvider.DriftDetected = hasImmutableDrift(pod.Spec.ForProvider, response)
+	upToDate := !hasMutableDrift(pod.Spec.ForProvider, response) &&
+		!hasLifecycleDrift(pod.Spec.ForProvider, response.DesiredStatus)
 
 	connectionDetails := managed.ConnectionDetails{
 		"podId": []byte(externalName),
@@ -177,7 +186,7 @@ func (e *external) Observe(ctx context.Context, mg xpresource.Managed) (managed.
 	// would never persist.
 	return managed.ExternalObservation{
 		ResourceExists:    true,
-		ResourceUpToDate:  true,
+		ResourceUpToDate:  upToDate,
 		ConnectionDetails: connectionDetails,
 	}, nil
 }
@@ -188,22 +197,45 @@ func (e *external) Create(ctx context.Context, mg xpresource.Managed) (managed.E
 		return managed.ExternalCreation{}, errors.New(errNotPod)
 	}
 
+	spec := pod.Spec.ForProvider
 	name := pod.GetName()
 	req := runpodclient.CreatePodRequest{
-		Name:              &name,
-		ImageName:         pod.Spec.ForProvider.ImageName,
-		GPUTypeIDs:        cloneStrings(pod.Spec.ForProvider.GPUTypeIDs),
-		GPUCount:          pod.Spec.ForProvider.GPUCount,
-		SupportPublicIP:   pod.Spec.ForProvider.SupportPublicIP,
-		ContainerDiskInGb: pod.Spec.ForProvider.ContainerDiskInGb,
-		VolumeInGb:        pod.Spec.ForProvider.VolumeInGb,
-		VolumeMountPath:   pod.Spec.ForProvider.VolumeMountPath,
-		Env:               buildEnvMap(pod.Spec.ForProvider.Env),
-		Ports:             buildPortTokens(pod.Spec.ForProvider.Ports),
-		DockerStartCmd:    cloneStrings(pod.Spec.ForProvider.DockerStartCmd),
+		Name:                    &name,
+		ImageName:               spec.ImageName,
+		GPUTypeIDs:              cloneStrings(spec.GPUTypeIDs),
+		GPUCount:                spec.GPUCount,
+		SupportPublicIP:         spec.SupportPublicIP,
+		ContainerDiskInGb:       spec.ContainerDiskInGb,
+		VolumeInGb:              spec.VolumeInGb,
+		VolumeMountPath:         spec.VolumeMountPath,
+		Env:                     buildEnvMap(spec.Env),
+		Ports:                   buildPortTokens(spec.Ports),
+		DockerStartCmd:          cloneStrings(spec.DockerStartCmd),
+		DockerEntrypoint:        cloneStrings(spec.DockerEntrypoint),
+		ComputeType:             spec.ComputeType,
+		VCPUCount:               spec.VCPUCount,
+		CPUFlavorIDs:            cloneStrings(spec.CPUFlavorIDs),
+		CPUFlavorPriority:       spec.CPUFlavorPriority,
+		DataCenterIDs:           cloneStrings(spec.DataCenterIDs),
+		DataCenterPriority:      spec.DataCenterPriority,
+		GPUTypePriority:         spec.GPUTypePriority,
+		CountryCodes:            cloneStrings(spec.CountryCodes),
+		Interruptible:           spec.Interruptible,
+		Locked:                  spec.Locked,
+		GlobalNetworking:        spec.GlobalNetworking,
+		VolumeEncrypted:         spec.VolumeEncrypted,
+		AllowedCudaVersions:     cloneStrings(spec.AllowedCudaVersions),
+		MinRAMPerGPU:            spec.MinRAMPerGPU,
+		MinVCPUPerGPU:           spec.MinVCPUPerGPU,
+		MinDiskBandwidthMBps:    spec.MinDiskBandwidthMBps,
+		MinDownloadMbps:         spec.MinDownloadMbps,
+		MinUploadMbps:           spec.MinUploadMbps,
+		TemplateID:              spec.TemplateID,
+		NetworkVolumeID:         spec.NetworkVolumeID,
+		ContainerRegistryAuthID: spec.ContainerRegistryAuthID,
 	}
-	if pod.Spec.ForProvider.CloudType != nil {
-		cloudType := string(*pod.Spec.ForProvider.CloudType)
+	if spec.CloudType != nil {
+		cloudType := string(*spec.CloudType)
 		req.CloudType = &cloudType
 	}
 
@@ -221,11 +253,55 @@ func (e *external) Create(ctx context.Context, mg xpresource.Managed) (managed.E
 	}, nil
 }
 
-func (e *external) Update(_ context.Context, _ xpresource.Managed) (managed.ExternalUpdate, error) {
-	// Pods are immutable in the RunPod API; Observe always reports
-	// up-to-date and surfaces drift via status.atProvider.driftDetected,
-	// so this should never be called.
-	e.log.V(1).Info("Pod is immutable; Update is a no-op")
+func (e *external) Update(ctx context.Context, mg xpresource.Managed) (managed.ExternalUpdate, error) {
+	pod, ok := mg.(*v1alpha1.Pod)
+	if !ok {
+		return managed.ExternalUpdate{}, errors.New(errNotPod)
+	}
+	externalName := meta.GetExternalName(pod)
+	if externalName == "" {
+		return managed.ExternalUpdate{}, nil
+	}
+
+	spec := pod.Spec.ForProvider
+	response, found, err := e.client.GetPod(ctx, externalName)
+	if err != nil {
+		return managed.ExternalUpdate{}, errors.Wrap(err, errGetPod)
+	}
+	if !found {
+		return managed.ExternalUpdate{}, nil
+	}
+
+	if hasMutableDrift(spec, response) {
+		if err := e.client.UpdatePod(ctx, externalName, runpodclient.UpdatePodRequest{
+			ImageName:               spec.ImageName,
+			ContainerDiskInGb:       spec.ContainerDiskInGb,
+			VolumeInGb:              spec.VolumeInGb,
+			VolumeMountPath:         spec.VolumeMountPath,
+			Env:                     buildEnvMap(spec.Env),
+			Ports:                   buildPortTokens(spec.Ports),
+			DockerStartCmd:          cloneStrings(spec.DockerStartCmd),
+			DockerEntrypoint:        cloneStrings(spec.DockerEntrypoint),
+			Locked:                  spec.Locked,
+			GlobalNetworking:        spec.GlobalNetworking,
+			ContainerRegistryAuthID: spec.ContainerRegistryAuthID,
+		}); err != nil {
+			return managed.ExternalUpdate{}, errors.Wrap(err, errUpdatePod)
+		}
+	}
+
+	if hasLifecycleDrift(spec, response.DesiredStatus) {
+		if desiredStateOrDefault(spec) == "EXITED" {
+			if err := e.client.StopPod(ctx, externalName); err != nil {
+				return managed.ExternalUpdate{}, errors.Wrap(err, errStopPod)
+			}
+		} else {
+			if err := e.client.StartPod(ctx, externalName); err != nil {
+				return managed.ExternalUpdate{}, errors.Wrap(err, errStartPod)
+			}
+		}
+	}
+
 	return managed.ExternalUpdate{}, nil
 }
 
@@ -357,6 +433,91 @@ func parsePodStartedAt(value string) (time.Time, error) {
 	}
 
 	return time.Time{}, lastErr
+}
+
+// desiredStateOrDefault returns the lifecycle target; unset means RUNNING.
+func desiredStateOrDefault(spec v1alpha1.PodParameters) string {
+	if spec.DesiredState != nil {
+		return *spec.DesiredState
+	}
+	return "RUNNING"
+}
+
+// hasMutableDrift reports whether any PATCHable spec field diverges from
+// the observation. Nil/empty spec fields never drift (unmanaged).
+func hasMutableDrift(spec v1alpha1.PodParameters, r *runpodclient.PodResponse) bool {
+	if spec.ImageName != nil && *spec.ImageName != r.Image {
+		return true
+	}
+	if spec.ContainerDiskInGb != nil && *spec.ContainerDiskInGb != r.ContainerDiskInGb {
+		return true
+	}
+	if spec.VolumeInGb != nil && *spec.VolumeInGb != r.VolumeInGb {
+		return true
+	}
+	if spec.VolumeMountPath != nil && *spec.VolumeMountPath != r.VolumeMountPath {
+		return true
+	}
+	if spec.Locked != nil && *spec.Locked != r.Locked {
+		return true
+	}
+	if spec.ContainerRegistryAuthID != nil && *spec.ContainerRegistryAuthID != r.ContainerRegistryAuthID {
+		return true
+	}
+	if len(spec.DockerStartCmd) > 0 && !stringSlicesEqual(spec.DockerStartCmd, r.DockerStartCmd) {
+		return true
+	}
+	if len(spec.DockerEntrypoint) > 0 && !stringSlicesEqual(spec.DockerEntrypoint, r.DockerEntrypoint) {
+		return true
+	}
+	// globalNetworking is write-only (never echoed) and excluded, like
+	// dataCenterIds on Endpoint.
+	return hasEnvDrift(spec.Env, r.Env) || hasPortsDrift(spec.Ports, r.Ports)
+}
+
+// hasImmutableDrift reports whether immutable spec fields diverge from the
+// running pod. Immutable drift can only come from editing the spec after
+// creation; it can never be reconciled in place, so it is surfaced via
+// status.atProvider.driftDetected instead of blocking the Synced condition.
+// Only fields the GET response reliably echoes participate: the observed
+// GPU type must be one of the acceptable spec types (the list is a
+// priority order, so membership — not equality — is the correct check),
+// and the Spot/interruptible flag must match.
+func hasImmutableDrift(spec v1alpha1.PodParameters, r *runpodclient.PodResponse) bool {
+	if spec.Interruptible != nil && *spec.Interruptible != r.Interruptible {
+		return true
+	}
+	if len(spec.GPUTypeIDs) > 0 && r.Machine.GPUTypeID != "" {
+		for _, id := range spec.GPUTypeIDs {
+			if id == r.Machine.GPUTypeID {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// hasLifecycleDrift reports whether the observed lifecycle status diverges
+// from spec.desiredState. Only RUNNING/EXITED participate; TERMINATED is
+// handled by the recreateOnTerminate path.
+func hasLifecycleDrift(spec v1alpha1.PodParameters, observedStatus string) bool {
+	if observedStatus != "RUNNING" && observedStatus != "EXITED" {
+		return false
+	}
+	return desiredStateOrDefault(spec) != observedStatus
+}
+
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func stringMapsEqual(a, b map[string]string) bool {

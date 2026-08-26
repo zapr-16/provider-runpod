@@ -47,17 +47,57 @@ spec:
               forProvider:
                 description: |-
                   EndpointParameters define the desired state inputs for a RunPod
-                  serverless endpoint. The controller implicitly manages the backing
-                  RunPod template: Create provisions the template then the endpoint,
-                  Delete removes both, and template drift is folded into endpoint drift.
+                  serverless endpoint. By default (imageName set) the controller implicitly
+                  manages the backing RunPod template: Create provisions the template then
+                  the endpoint, Delete removes both, and template drift is folded into
+                  endpoint drift. In templateId mode, the endpoint instead references an
+                  existing template owned elsewhere, and the controller never creates,
+                  patches, or deletes any template.
                 properties:
+                  allowedCudaVersions:
+                    description: CUDA versions the workers are allowed to run on.
+                    items:
+                      type: string
+                    type: array
+                  computeType:
+                    description: |-
+                      Worker compute class: GPU or CPU. Create-only; RunPod does not allow
+                      changing an endpoint's compute type after creation, and it is absent
+                      from the PATCH schema.
+                    enum:
+                    - GPU
+                    - CPU
+                    type: string
                   containerDiskInGb:
                     description: Size of the ephemeral container disk in GiB (carried
                       by the template).
                     format: int32
                     type: integer
+                  containerRegistryAuthId:
+                    description: |-
+                      ID of the container registry credentials used to pull the image
+                      (carried by the template).
+                    type: string
+                  cpuFlavorIds:
+                    description: Ordered list of acceptable RunPod CPU flavor IDs
+                      for CPU endpoints.
+                    items:
+                      type: string
+                    type: array
                   dataCenterIds:
                     description: Restrict workers to specific RunPod data center IDs.
+                    items:
+                      type: string
+                    type: array
+                  dockerEntrypoint:
+                    description: Entrypoint overriding the image's default (carried
+                      by the template).
+                    items:
+                      type: string
+                    type: array
+                  dockerStartCmd:
+                    description: Command RunPod runs to start the container (carried
+                      by the template).
                     items:
                       type: string
                     type: array
@@ -106,13 +146,37 @@ spec:
                     minimum: 1
                     type: integer
                   imageName:
-                    description: Container image the serverless workers run, e.g.
-                      runpod/worker-v1-vllm:stable.
+                    description: |-
+                      Container image the serverless workers run, e.g. runpod/worker-v1-vllm:stable.
+                      Mutually exclusive with templateId.
+                    type: string
+                  minCudaVersion:
+                    description: Minimum CUDA version required on the workers.
                     type: string
                   networkVolumeId:
                     description: Network volume to attach to the workers, e.g. for
                       model weight caching.
                     type: string
+                  networkVolumeIds:
+                    description: |-
+                      Network volumes to attach to the workers, for multi-volume mounting.
+                      Mutually exclusive with networkVolumeId.
+                    items:
+                      type: string
+                    type: array
+                  recycleWorkersOnTemplateChange:
+                    default: true
+                    description: |-
+                      Recycle running/idle workers after the implicit template changes
+                      (image/env/disk), by cycling workersMax through 0. Without this,
+                      FlashBoot standby workers keep serving the old template
+                      indefinitely. Defaults to true. Ignored in templateId mode. Recycling
+                      additionally requires workersMax to be set: it is both the value
+                      restored after the cycle and the value the next reconcile's endpoint
+                      PATCH will carry, so a transient restore failure self-heals on
+                      retry. When workersMax is unset, recycling is skipped (logged) rather
+                      than attempted, since there would be no safe value to restore to.
+                    type: boolean
                   scalerType:
                     description: Autoscaling strategy, QUEUE_DELAY or REQUEST_COUNT.
                     enum:
@@ -125,6 +189,19 @@ spec:
                       requests per worker for REQUEST_COUNT (RunPod default 4).
                     format: int32
                     type: integer
+                  templateId:
+                    description: |-
+                      Existing RunPod template to run the endpoint from, e.g. one managed
+                      by a Template resource. Mutually exclusive with imageName and the
+                      other template-carried fields (env, containerDiskInGb,
+                      dockerStartCmd, dockerEntrypoint, containerRegistryAuthId): when
+                      templateId is set the controller does NOT create, patch, or delete
+                      any template — the referenced template is owned elsewhere.
+                    type: string
+                  vcpuCount:
+                    description: Number of vCPUs allocated per worker for CPU endpoints.
+                    format: int32
+                    type: integer
                   workersMax:
                     description: Maximum number of concurrently running workers.
                     format: int32
@@ -135,9 +212,19 @@ spec:
                     format: int32
                     minimum: 0
                     type: integer
-                required:
-                - imageName
                 type: object
+                x-kubernetes-validations:
+                - message: networkVolumeId and networkVolumeIds are mutually exclusive
+                  rule: '!(has(self.networkVolumeId) && has(self.networkVolumeIds))'
+                - message: exactly one of imageName or templateId must be set
+                  rule: has(self.imageName) != has(self.templateId)
+                - message: template-carried fields cannot be set together with templateId
+                  rule: '!has(self.templateId) || (!has(self.env) && !has(self.containerDiskInGb)
+                    && !has(self.dockerStartCmd) && !has(self.dockerEntrypoint) &&
+                    !has(self.containerRegistryAuthId))'
+                - message: cannot switch between imageName and templateId modes after
+                    creation
+                  rule: has(self.templateId) == has(oldSelf.templateId)
               managementPolicies:
                 default:
                 - '*'
@@ -221,8 +308,11 @@ spec:
                       unlike pod proxy URLs, which are unauthenticated.
                     type: string
                   templateId:
-                    description: ID of the implicitly managed RunPod template backing
-                      this endpoint.
+                    description: |-
+                      ID of the RunPod template backing this endpoint: in imageName mode,
+                      the template implicitly created and managed by this controller; in
+                      templateId mode, the externally-owned template referenced by
+                      spec.templateId.
                     type: string
                   workersReady:
                     description: Number of workers currently in RUNNING state.

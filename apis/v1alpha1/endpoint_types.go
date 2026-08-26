@@ -27,12 +27,43 @@ const (
 )
 
 // EndpointParameters define the desired state inputs for a RunPod
-// serverless endpoint. The controller implicitly manages the backing
-// RunPod template: Create provisions the template then the endpoint,
-// Delete removes both, and template drift is folded into endpoint drift.
+// serverless endpoint. By default (imageName set) the controller implicitly
+// manages the backing RunPod template: Create provisions the template then
+// the endpoint, Delete removes both, and template drift is folded into
+// endpoint drift. In templateId mode, the endpoint instead references an
+// existing template owned elsewhere, and the controller never creates,
+// patches, or deletes any template.
+// +kubebuilder:validation:XValidation:rule="!(has(self.networkVolumeId) && has(self.networkVolumeIds))",message="networkVolumeId and networkVolumeIds are mutually exclusive"
+// +kubebuilder:validation:XValidation:rule="has(self.imageName) != has(self.templateId)",message="exactly one of imageName or templateId must be set"
+// +kubebuilder:validation:XValidation:rule="!has(self.templateId) || (!has(self.env) && !has(self.containerDiskInGb) && !has(self.dockerStartCmd) && !has(self.dockerEntrypoint) && !has(self.containerRegistryAuthId))",message="template-carried fields cannot be set together with templateId"
+// +kubebuilder:validation:XValidation:rule="has(self.templateId) == has(oldSelf.templateId)",message="cannot switch between imageName and templateId modes after creation"
 type EndpointParameters struct {
 	// Container image the serverless workers run, e.g. runpod/worker-v1-vllm:stable.
-	ImageName string `json:"imageName"`
+	// Mutually exclusive with templateId.
+	// +optional
+	ImageName *string `json:"imageName,omitempty"`
+
+	// Existing RunPod template to run the endpoint from, e.g. one managed
+	// by a Template resource. Mutually exclusive with imageName and the
+	// other template-carried fields (env, containerDiskInGb,
+	// dockerStartCmd, dockerEntrypoint, containerRegistryAuthId): when
+	// templateId is set the controller does NOT create, patch, or delete
+	// any template — the referenced template is owned elsewhere.
+	// +optional
+	TemplateID *string `json:"templateId,omitempty"`
+
+	// Recycle running/idle workers after the implicit template changes
+	// (image/env/disk), by cycling workersMax through 0. Without this,
+	// FlashBoot standby workers keep serving the old template
+	// indefinitely. Defaults to true. Ignored in templateId mode. Recycling
+	// additionally requires workersMax to be set: it is both the value
+	// restored after the cycle and the value the next reconcile's endpoint
+	// PATCH will carry, so a transient restore failure self-heals on
+	// retry. When workersMax is unset, recycling is skipped (logged) rather
+	// than attempted, since there would be no safe value to restore to.
+	// +kubebuilder:default=true
+	// +optional
+	RecycleWorkersOnTemplateChange *bool `json:"recycleWorkersOnTemplateChange,omitempty"`
 
 	// Environment variables injected into the workers (carried by the template).
 	// +optional
@@ -94,6 +125,48 @@ type EndpointParameters struct {
 	// Maximum milliseconds a single request may run on a worker.
 	// +optional
 	ExecutionTimeoutMs *int32 `json:"executionTimeoutMs,omitempty"`
+
+	// Worker compute class: GPU or CPU. Create-only; RunPod does not allow
+	// changing an endpoint's compute type after creation, and it is absent
+	// from the PATCH schema.
+	// +kubebuilder:validation:Enum=GPU;CPU
+	// +optional
+	// +immutable
+	ComputeType *string `json:"computeType,omitempty"`
+
+	// Number of vCPUs allocated per worker for CPU endpoints.
+	// +optional
+	VCPUCount *int32 `json:"vcpuCount,omitempty"`
+
+	// Ordered list of acceptable RunPod CPU flavor IDs for CPU endpoints.
+	// +optional
+	CPUFlavorIDs []string `json:"cpuFlavorIds,omitempty"`
+
+	// CUDA versions the workers are allowed to run on.
+	// +optional
+	AllowedCudaVersions []string `json:"allowedCudaVersions,omitempty"`
+
+	// Minimum CUDA version required on the workers.
+	// +optional
+	MinCudaVersion *string `json:"minCudaVersion,omitempty"`
+
+	// Network volumes to attach to the workers, for multi-volume mounting.
+	// Mutually exclusive with networkVolumeId.
+	// +optional
+	NetworkVolumeIDs []string `json:"networkVolumeIds,omitempty"`
+
+	// Command RunPod runs to start the container (carried by the template).
+	// +optional
+	DockerStartCmd []string `json:"dockerStartCmd,omitempty"`
+
+	// Entrypoint overriding the image's default (carried by the template).
+	// +optional
+	DockerEntrypoint []string `json:"dockerEntrypoint,omitempty"`
+
+	// ID of the container registry credentials used to pull the image
+	// (carried by the template).
+	// +optional
+	ContainerRegistryAuthID *string `json:"containerRegistryAuthId,omitempty"`
 }
 
 // EndpointObservation captures the observed state returned by RunPod.
@@ -101,7 +174,10 @@ type EndpointObservation struct {
 	// RunPod serverless endpoint ID, mirrored from the external name.
 	EndpointID string `json:"endpointId,omitempty"`
 
-	// ID of the implicitly managed RunPod template backing this endpoint.
+	// ID of the RunPod template backing this endpoint: in imageName mode,
+	// the template implicitly created and managed by this controller; in
+	// templateId mode, the externally-owned template referenced by
+	// spec.templateId.
 	TemplateID string `json:"templateId,omitempty"`
 
 	// Data-plane base URL (https://api.runpod.ai/v2/{endpointId}).

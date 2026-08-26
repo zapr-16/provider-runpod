@@ -1,4 +1,4 @@
-package pod
+package networkvolume
 
 import (
 	"context"
@@ -17,8 +17,8 @@ import (
 )
 
 const (
-	errNotPod                = "managed resource is not a Pod"
-	errMissingProviderConfig = "pod is missing providerConfigRef"
+	errNotNetworkVolume      = "managed resource is not a NetworkVolume"
+	errMissingProviderConfig = "network volume is missing providerConfigRef"
 	errTrackUsage            = "cannot track ProviderConfigUsage"
 )
 
@@ -29,41 +29,41 @@ type connector struct {
 }
 
 func (c *connector) Connect(ctx context.Context, mg xpresource.Managed) (managed.ExternalClient, error) {
-	pod, ok := mg.(*v1alpha1.Pod)
+	nv, ok := mg.(*v1alpha1.NetworkVolume)
 	if !ok {
-		return nil, errors.New(errNotPod)
+		return nil, errors.New(errNotNetworkVolume)
 	}
 
-	ref := pod.GetProviderConfigReference()
+	ref := nv.GetProviderConfigReference()
 	if ref == nil || ref.Name == "" {
 		return nil, errors.New(errMissingProviderConfig)
 	}
+
 	runpodclient.NormalizeProviderConfigRefKind(ref)
 
 	// Record the usage so Crossplane's in-use protection blocks deletion
-	// of the ProviderConfig while this Pod still needs it.
-	if err := c.usage.Track(ctx, pod); err != nil {
+	// of the ProviderConfig while this NetworkVolume still needs it.
+	if err := c.usage.Track(ctx, nv); err != nil {
 		return nil, errors.Wrap(err, errTrackUsage)
 	}
 
-	rc, err := runpodclient.ClientForProviderConfigRef(ctx, c.kube, pod.GetNamespace(), *ref)
+	rc, err := runpodclient.ClientForProviderConfigRef(ctx, c.kube, nv.GetNamespace(), *ref)
 	if err != nil {
 		return nil, err
 	}
 
 	return &external{
-		client:    rc,
-		log:       c.log.WithValues("pod", pod.GetName()),
-		probeHTTP: defaultHTTPProbe,
+		client: rc,
+		log:    c.log.WithValues("networkvolume", nv.GetName()),
 	}, nil
 }
 
-// Setup registers the Pod managed-resource controller with the manager.
+// Setup registers the NetworkVolume managed-resource controller with the manager.
 func Setup(mgr ctrl.Manager, log logr.Logger) error {
 	conn := &connector{
 		kube:  mgr.GetClient(),
 		usage: xpresource.NewProviderConfigUsageTracker(mgr.GetClient(), &v1beta1.ProviderConfigUsage{}),
 		log:   log,
 	}
-	return register.ManagedController(mgr, "Pod", &v1alpha1.Pod{}, conn, log)
+	return register.ManagedController(mgr, "NetworkVolume", &v1alpha1.NetworkVolume{}, conn, log)
 }

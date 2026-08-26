@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ghcr-creds
+  namespace: default
+type: Opaque
+stringData:
+  username: my-github-user
+  password: ghp_xxxx
+---
+apiVersion: runpod.crossplane.io/v1alpha1
+kind: ContainerRegistryAuth
+metadata:
+  name: ghcr
+  namespace: default
+spec:
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
+  forProvider:
+    credentialsSecretRef:
+      name: ghcr-creds

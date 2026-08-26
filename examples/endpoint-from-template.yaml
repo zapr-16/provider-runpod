@@ -1,0 +1,21 @@
+# Serverless endpoint referencing an EXTERNAL template, e.g. one owned by a
+# standalone Template resource. In this mode the controller never creates,
+# patches, or deletes any template — the referenced template is owned
+# elsewhere. templateId is mutually exclusive with imageName and the other
+# template-carried fields (env, containerDiskInGb, dockerStartCmd,
+# dockerEntrypoint, containerRegistryAuthId).
+apiVersion: runpod.crossplane.io/v1alpha1
+kind: Endpoint
+metadata:
+  name: vllm-from-template
+  namespace: default
+spec:
+  providerConfigRef:
+    kind: ClusterProviderConfig
+    name: default
+  forProvider:
+    templateId: <template-id>   # e.g. status.atProvider.templateId of a Template resource
+    gpuTypeIds:
+      - "NVIDIA GeForce RTX 3090"
+    workersMin: 0
+    workersMax: 2

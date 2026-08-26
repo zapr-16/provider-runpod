@@ -26,6 +26,9 @@ const (
 	errDoRequest          = "cannot execute RunPod request"
 	errDecodeResponse     = "cannot decode RunPod response"
 	errInvalidResourceID  = "invalid RunPod resource identifier"
+
+	podsPath       = "/pods"
+	podsPathPrefix = podsPath + "/"
 )
 
 // resourceIDPattern matches RunPod resource identifiers (pod, endpoint, and
@@ -49,33 +52,81 @@ type Client struct {
 	apiKey     string
 }
 
-// CreatePodRequest mirrors the RunPod pod create payload used by the provider.
+// CreatePodRequest mirrors the RunPod pod create payload (POST /pods, 1:1).
 type CreatePodRequest struct {
-	Name              *string           `json:"name,omitempty"`
-	ImageName         *string           `json:"imageName,omitempty"`
-	GPUTypeIDs        []string          `json:"gpuTypeIds,omitempty"`
-	GPUCount          *int32            `json:"gpuCount,omitempty"`
-	CloudType         *string           `json:"cloudType,omitempty"`
-	SupportPublicIP   *bool             `json:"supportPublicIp,omitempty"`
-	ContainerDiskInGb *int32            `json:"containerDiskInGb,omitempty"`
-	VolumeInGb        *int32            `json:"volumeInGb,omitempty"`
-	VolumeMountPath   *string           `json:"volumeMountPath,omitempty"`
-	Env               map[string]string `json:"env,omitempty"`
-	Ports             []string          `json:"ports,omitempty"`
-	DockerStartCmd    []string          `json:"dockerStartCmd,omitempty"`
+	Name                    *string           `json:"name,omitempty"`
+	ImageName               *string           `json:"imageName,omitempty"`
+	GPUTypeIDs              []string          `json:"gpuTypeIds,omitempty"`
+	GPUCount                *int32            `json:"gpuCount,omitempty"`
+	CloudType               *string           `json:"cloudType,omitempty"`
+	SupportPublicIP         *bool             `json:"supportPublicIp,omitempty"`
+	ContainerDiskInGb       *int32            `json:"containerDiskInGb,omitempty"`
+	VolumeInGb              *int32            `json:"volumeInGb,omitempty"`
+	VolumeMountPath         *string           `json:"volumeMountPath,omitempty"`
+	Env                     map[string]string `json:"env,omitempty"`
+	Ports                   []string          `json:"ports,omitempty"`
+	DockerStartCmd          []string          `json:"dockerStartCmd,omitempty"`
+	DockerEntrypoint        []string          `json:"dockerEntrypoint,omitempty"`
+	ComputeType             *string           `json:"computeType,omitempty"`
+	VCPUCount               *int32            `json:"vcpuCount,omitempty"`
+	CPUFlavorIDs            []string          `json:"cpuFlavorIds,omitempty"`
+	CPUFlavorPriority       *string           `json:"cpuFlavorPriority,omitempty"`
+	DataCenterIDs           []string          `json:"dataCenterIds,omitempty"`
+	DataCenterPriority      *string           `json:"dataCenterPriority,omitempty"`
+	GPUTypePriority         *string           `json:"gpuTypePriority,omitempty"`
+	CountryCodes            []string          `json:"countryCodes,omitempty"`
+	Interruptible           *bool             `json:"interruptible,omitempty"`
+	Locked                  *bool             `json:"locked,omitempty"`
+	GlobalNetworking        *bool             `json:"globalNetworking,omitempty"`
+	VolumeEncrypted         *bool             `json:"volumeEncrypted,omitempty"`
+	AllowedCudaVersions     []string          `json:"allowedCudaVersions,omitempty"`
+	MinRAMPerGPU            *int32            `json:"minRAMPerGPU,omitempty"`
+	MinVCPUPerGPU           *int32            `json:"minVCPUPerGPU,omitempty"`
+	MinDiskBandwidthMBps    *int32            `json:"minDiskBandwidthMBps,omitempty"`
+	MinDownloadMbps         *int32            `json:"minDownloadMbps,omitempty"`
+	MinUploadMbps           *int32            `json:"minUploadMbps,omitempty"`
+	TemplateID              *string           `json:"templateId,omitempty"`
+	NetworkVolumeID         *string           `json:"networkVolumeId,omitempty"`
+	ContainerRegistryAuthID *string           `json:"containerRegistryAuthId,omitempty"`
+}
+
+// UpdatePodRequest mirrors the RunPod pod PATCH payload. RunPod applies
+// container-level changes (image, env, ...) when the pod next (re)starts.
+type UpdatePodRequest struct {
+	Name                    *string           `json:"name,omitempty"`
+	ImageName               *string           `json:"imageName,omitempty"`
+	ContainerDiskInGb       *int32            `json:"containerDiskInGb,omitempty"`
+	VolumeInGb              *int32            `json:"volumeInGb,omitempty"`
+	VolumeMountPath         *string           `json:"volumeMountPath,omitempty"`
+	Env                     map[string]string `json:"env,omitempty"`
+	Ports                   []string          `json:"ports,omitempty"`
+	DockerStartCmd          []string          `json:"dockerStartCmd,omitempty"`
+	DockerEntrypoint        []string          `json:"dockerEntrypoint,omitempty"`
+	Locked                  *bool             `json:"locked,omitempty"`
+	GlobalNetworking        *bool             `json:"globalNetworking,omitempty"`
+	ContainerRegistryAuthID *string           `json:"containerRegistryAuthId,omitempty"`
 }
 
 // PodResponse mirrors the subset of the RunPod Pod GET response needed by Observe().
 type PodResponse struct {
-	ID            string            `json:"id"`
-	DesiredStatus string            `json:"desiredStatus"`
-	PublicIP      string            `json:"publicIp"`
-	PortMappings  map[string]int32  `json:"portMappings"`
-	CostPerHr     float64           `json:"costPerHr"`
-	LastStartedAt string            `json:"lastStartedAt"`
-	Env           map[string]string `json:"env"`
-	Ports         []string          `json:"ports"`
-	GPU           struct {
+	ID                      string            `json:"id"`
+	DesiredStatus           string            `json:"desiredStatus"`
+	PublicIP                string            `json:"publicIp"`
+	PortMappings            map[string]int32  `json:"portMappings"`
+	CostPerHr               float64           `json:"costPerHr"`
+	LastStartedAt           string            `json:"lastStartedAt"`
+	Env                     map[string]string `json:"env"`
+	Ports                   []string          `json:"ports"`
+	Image                   string            `json:"image"`
+	DockerStartCmd          []string          `json:"dockerStartCmd"`
+	DockerEntrypoint        []string          `json:"dockerEntrypoint"`
+	ContainerDiskInGb       int32             `json:"containerDiskInGb"`
+	VolumeInGb              int32             `json:"volumeInGb"`
+	VolumeMountPath         string            `json:"volumeMountPath"`
+	Locked                  bool              `json:"locked"`
+	Interruptible           bool              `json:"interruptible"`
+	ContainerRegistryAuthID string            `json:"containerRegistryAuthId"`
+	GPU                     struct {
 		DisplayName string `json:"displayName"`
 	} `json:"gpu"`
 	Machine struct {
@@ -165,7 +216,7 @@ func ClientFromClusterProviderConfig(ctx context.Context, kube client.Client, pc
 // other status is treated as a transient failure (rate limiting, an outage,
 // ...) rather than a credentials problem.
 func (c *Client) Ping(ctx context.Context) error {
-	req, err := c.NewRequest(ctx, http.MethodGet, "/pods", nil)
+	req, err := c.NewRequest(ctx, http.MethodGet, podsPath, nil)
 	if err != nil {
 		return errors.Wrap(err, errCreateRequest)
 	}
@@ -182,7 +233,7 @@ func (c *Client) Ping(ctx context.Context) error {
 		return nil
 	}
 
-	return errors.Errorf("RunPod GET /pods returned status %d: %s", resp.StatusCode, readErrorBody(resp.Body))
+	return errors.Errorf("RunPod GET %s returned status %d: %s", podsPath, resp.StatusCode, readErrorBody(resp.Body))
 }
 
 // GetPod retrieves a pod observation payload from the RunPod API. Only a
@@ -194,7 +245,7 @@ func (c *Client) GetPod(ctx context.Context, podID string) (*PodResponse, bool, 
 		return nil, false, err
 	}
 
-	req, err := c.NewRequest(ctx, http.MethodGet, "/pods/"+podID+"?includeMachine=true", nil)
+	req, err := c.NewRequest(ctx, http.MethodGet, podsPathPrefix+podID+"?includeMachine=true", nil)
 	if err != nil {
 		return nil, false, errors.Wrap(err, errCreateRequest)
 	}
@@ -211,7 +262,7 @@ func (c *Client) GetPod(ctx context.Context, podID string) (*PodResponse, bool, 
 		return nil, false, nil
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, false, errors.Errorf("RunPod GET /pods/%s returned status %d: %s", podID, resp.StatusCode, readErrorBody(resp.Body))
+		return nil, false, errors.Errorf("RunPod GET %s returned status %d: %s", podsPathPrefix+podID, resp.StatusCode, readErrorBody(resp.Body))
 	}
 
 	var out PodResponse
@@ -229,7 +280,7 @@ func (c *Client) CreatePod(ctx context.Context, payload CreatePodRequest) (strin
 		return "", errors.Wrap(err, errCreateRequest)
 	}
 
-	req, err := c.NewRequest(ctx, http.MethodPost, "/pods", bytes.NewReader(body))
+	req, err := c.NewRequest(ctx, http.MethodPost, podsPath, bytes.NewReader(body))
 	if err != nil {
 		return "", errors.Wrap(err, errCreateRequest)
 	}
@@ -243,7 +294,7 @@ func (c *Client) CreatePod(ctx context.Context, payload CreatePodRequest) (strin
 	}()
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return "", errors.Errorf("RunPod POST /pods returned status %d: %s", resp.StatusCode, readErrorBody(resp.Body))
+		return "", errors.Errorf("RunPod POST %s returned status %d: %s", podsPath, resp.StatusCode, readErrorBody(resp.Body))
 	}
 
 	var out PodResponse
@@ -262,7 +313,7 @@ func (c *Client) DeletePod(ctx context.Context, podID string) error {
 		return err
 	}
 
-	req, err := c.NewRequest(ctx, http.MethodDelete, "/pods/"+podID, nil)
+	req, err := c.NewRequest(ctx, http.MethodDelete, podsPathPrefix+podID, nil)
 	if err != nil {
 		return errors.Wrap(err, errCreateRequest)
 	}
@@ -279,9 +330,50 @@ func (c *Client) DeletePod(ctx context.Context, podID string) error {
 		return nil
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return errors.Errorf("RunPod DELETE /pods/%s returned status %d: %s", podID, resp.StatusCode, readErrorBody(resp.Body))
+		return errors.Errorf("RunPod DELETE %s returned status %d: %s", podsPathPrefix+podID, resp.StatusCode, readErrorBody(resp.Body))
 	}
 
+	return nil
+}
+
+// UpdatePod patches mutable fields of a RunPod pod. RunPod applies
+// container-level changes when the pod next (re)starts.
+func (c *Client) UpdatePod(ctx context.Context, podID string, payload UpdatePodRequest) error {
+	if err := validateResourceID(podID); err != nil {
+		return err
+	}
+	return c.doJSON(ctx, http.MethodPatch, podsPathPrefix+podID, payload, nil)
+}
+
+// StartPod starts or resumes a stopped pod (POST /pods/{podId}/start).
+func (c *Client) StartPod(ctx context.Context, podID string) error {
+	return c.podAction(ctx, podID, "start")
+}
+
+// StopPod stops a running pod without deleting it (POST /pods/{podId}/stop).
+// The pod keeps its volume and keeps billing storage while stopped.
+func (c *Client) StopPod(ctx context.Context, podID string) error {
+	return c.podAction(ctx, podID, "stop")
+}
+
+func (c *Client) podAction(ctx context.Context, podID, action string) error {
+	if err := validateResourceID(podID); err != nil {
+		return err
+	}
+	req, err := c.NewRequest(ctx, http.MethodPost, podsPathPrefix+podID+"/"+action, nil)
+	if err != nil {
+		return errors.Wrap(err, errCreateRequest)
+	}
+	resp, err := c.Do(req)
+	if err != nil {
+		return errors.Wrap(err, errDoRequest)
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return errors.Errorf("RunPod POST %s returned status %d: %s", podsPathPrefix+podID+"/"+action, resp.StatusCode, readErrorBody(resp.Body))
+	}
 	return nil
 }
 

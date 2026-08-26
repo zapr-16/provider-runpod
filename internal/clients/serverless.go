@@ -19,60 +19,92 @@ const (
 // CreateTemplateRequest mirrors the RunPod template create payload used for
 // the implicit template backing a serverless Endpoint.
 type CreateTemplateRequest struct {
-	Name              string            `json:"name"`
-	ImageName         string            `json:"imageName"`
-	IsServerless      bool              `json:"isServerless"`
-	Env               map[string]string `json:"env,omitempty"`
-	ContainerDiskInGb *int32            `json:"containerDiskInGb,omitempty"`
+	Name                    string            `json:"name"`
+	ImageName               string            `json:"imageName"`
+	IsServerless            bool              `json:"isServerless"`
+	Env                     map[string]string `json:"env,omitempty"`
+	ContainerDiskInGb       *int32            `json:"containerDiskInGb,omitempty"`
+	DockerStartCmd          []string          `json:"dockerStartCmd,omitempty"`
+	DockerEntrypoint        []string          `json:"dockerEntrypoint,omitempty"`
+	ContainerRegistryAuthID *string           `json:"containerRegistryAuthId,omitempty"`
+	Ports                   []string          `json:"ports,omitempty"`
+	VolumeInGb              *int32            `json:"volumeInGb,omitempty"`
+	VolumeMountPath         *string           `json:"volumeMountPath,omitempty"`
 }
 
 // UpdateTemplateRequest mirrors the RunPod template PATCH payload.
 type UpdateTemplateRequest struct {
-	ImageName         *string           `json:"imageName,omitempty"`
-	Env               map[string]string `json:"env,omitempty"`
-	ContainerDiskInGb *int32            `json:"containerDiskInGb,omitempty"`
+	Name                    *string           `json:"name,omitempty"`
+	ImageName               *string           `json:"imageName,omitempty"`
+	Env                     map[string]string `json:"env,omitempty"`
+	ContainerDiskInGb       *int32            `json:"containerDiskInGb,omitempty"`
+	DockerStartCmd          []string          `json:"dockerStartCmd,omitempty"`
+	DockerEntrypoint        []string          `json:"dockerEntrypoint,omitempty"`
+	ContainerRegistryAuthID *string           `json:"containerRegistryAuthId,omitempty"`
+	Ports                   []string          `json:"ports,omitempty"`
+	VolumeInGb              *int32            `json:"volumeInGb,omitempty"`
+	VolumeMountPath         *string           `json:"volumeMountPath,omitempty"`
 }
 
 // TemplateResponse mirrors the subset of the RunPod template response the provider uses.
 type TemplateResponse struct {
-	ID                string            `json:"id"`
-	Name              string            `json:"name"`
-	ImageName         string            `json:"imageName"`
-	IsServerless      bool              `json:"isServerless"`
-	Env               map[string]string `json:"env"`
-	ContainerDiskInGb int32             `json:"containerDiskInGb"`
+	ID                      string            `json:"id"`
+	Name                    string            `json:"name"`
+	ImageName               string            `json:"imageName"`
+	IsServerless            bool              `json:"isServerless"`
+	Env                     map[string]string `json:"env"`
+	ContainerDiskInGb       int32             `json:"containerDiskInGb"`
+	DockerStartCmd          []string          `json:"dockerStartCmd"`
+	DockerEntrypoint        []string          `json:"dockerEntrypoint"`
+	ContainerRegistryAuthID string            `json:"containerRegistryAuthId"`
+	Ports                   []string          `json:"ports"`
+	VolumeInGb              int32             `json:"volumeInGb"`
+	VolumeMountPath         string            `json:"volumeMountPath"`
 }
 
 // CreateEndpointRequest mirrors the RunPod serverless endpoint create payload.
 type CreateEndpointRequest struct {
-	Name               *string  `json:"name,omitempty"`
-	TemplateID         string   `json:"templateId"`
-	GPUTypeIDs         []string `json:"gpuTypeIds,omitempty"`
-	GPUCount           *int32   `json:"gpuCount,omitempty"`
-	WorkersMin         *int32   `json:"workersMin,omitempty"`
-	WorkersMax         *int32   `json:"workersMax,omitempty"`
-	IdleTimeout        *int32   `json:"idleTimeout,omitempty"`
-	FlashBoot          *bool    `json:"flashboot,omitempty"`
-	ScalerType         *string  `json:"scalerType,omitempty"`
-	ScalerValue        *int32   `json:"scalerValue,omitempty"`
-	NetworkVolumeID    *string  `json:"networkVolumeId,omitempty"`
-	DataCenterIDs      []string `json:"dataCenterIds,omitempty"`
-	ExecutionTimeoutMs *int32   `json:"executionTimeoutMs,omitempty"`
+	Name                *string  `json:"name,omitempty"`
+	TemplateID          string   `json:"templateId"`
+	GPUTypeIDs          []string `json:"gpuTypeIds,omitempty"`
+	GPUCount            *int32   `json:"gpuCount,omitempty"`
+	WorkersMin          *int32   `json:"workersMin,omitempty"`
+	WorkersMax          *int32   `json:"workersMax,omitempty"`
+	IdleTimeout         *int32   `json:"idleTimeout,omitempty"`
+	FlashBoot           *bool    `json:"flashboot,omitempty"`
+	ScalerType          *string  `json:"scalerType,omitempty"`
+	ScalerValue         *int32   `json:"scalerValue,omitempty"`
+	NetworkVolumeID     *string  `json:"networkVolumeId,omitempty"`
+	DataCenterIDs       []string `json:"dataCenterIds,omitempty"`
+	ExecutionTimeoutMs  *int32   `json:"executionTimeoutMs,omitempty"`
+	ComputeType         *string  `json:"computeType,omitempty"`
+	VCPUCount           *int32   `json:"vcpuCount,omitempty"`
+	CPUFlavorIDs        []string `json:"cpuFlavorIds,omitempty"`
+	AllowedCudaVersions []string `json:"allowedCudaVersions,omitempty"`
+	MinCudaVersion      *string  `json:"minCudaVersion,omitempty"`
+	NetworkVolumeIDs    []string `json:"networkVolumeIds,omitempty"`
 }
 
 // UpdateEndpointRequest mirrors the RunPod serverless endpoint PATCH payload.
+// computeType is create-only and intentionally absent from this schema.
 type UpdateEndpointRequest struct {
-	GPUTypeIDs         []string `json:"gpuTypeIds,omitempty"`
-	GPUCount           *int32   `json:"gpuCount,omitempty"`
-	WorkersMin         *int32   `json:"workersMin,omitempty"`
-	WorkersMax         *int32   `json:"workersMax,omitempty"`
-	IdleTimeout        *int32   `json:"idleTimeout,omitempty"`
-	FlashBoot          *bool    `json:"flashboot,omitempty"`
-	ScalerType         *string  `json:"scalerType,omitempty"`
-	ScalerValue        *int32   `json:"scalerValue,omitempty"`
-	NetworkVolumeID    *string  `json:"networkVolumeId,omitempty"`
-	DataCenterIDs      []string `json:"dataCenterIds,omitempty"`
-	ExecutionTimeoutMs *int32   `json:"executionTimeoutMs,omitempty"`
+	TemplateID          *string  `json:"templateId,omitempty"`
+	GPUTypeIDs          []string `json:"gpuTypeIds,omitempty"`
+	GPUCount            *int32   `json:"gpuCount,omitempty"`
+	WorkersMin          *int32   `json:"workersMin,omitempty"`
+	WorkersMax          *int32   `json:"workersMax,omitempty"`
+	IdleTimeout         *int32   `json:"idleTimeout,omitempty"`
+	FlashBoot           *bool    `json:"flashboot,omitempty"`
+	ScalerType          *string  `json:"scalerType,omitempty"`
+	ScalerValue         *int32   `json:"scalerValue,omitempty"`
+	NetworkVolumeID     *string  `json:"networkVolumeId,omitempty"`
+	DataCenterIDs       []string `json:"dataCenterIds,omitempty"`
+	ExecutionTimeoutMs  *int32   `json:"executionTimeoutMs,omitempty"`
+	VCPUCount           *int32   `json:"vcpuCount,omitempty"`
+	CPUFlavorIDs        []string `json:"cpuFlavorIds,omitempty"`
+	AllowedCudaVersions []string `json:"allowedCudaVersions,omitempty"`
+	MinCudaVersion      *string  `json:"minCudaVersion,omitempty"`
+	NetworkVolumeIDs    []string `json:"networkVolumeIds,omitempty"`
 }
 
 // EndpointWorker is a worker entry in the endpoint observation; RunPod
@@ -287,4 +319,35 @@ func (c *Client) deleteStrict(ctx context.Context, path string) error {
 	}
 
 	return nil
+}
+
+// getStrict GETs path and decodes the response into out. Only a 404 means
+// "not found"; any other non-2xx is an error, so a transient failure never
+// reads as absence (which would trigger a duplicate Create).
+func (c *Client) getStrict(ctx context.Context, path string, out any) (bool, error) {
+	req, err := c.NewRequest(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return false, errors.Wrap(err, errCreateRequest)
+	}
+
+	resp, err := c.Do(req)
+	if err != nil {
+		return false, errors.Wrap(err, errDoRequest)
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return false, nil
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return false, errors.Errorf("RunPod GET %s returned status %d: %s", path, resp.StatusCode, readErrorBody(resp.Body))
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return false, errors.Wrap(err, errDecodeResponse)
+	}
+
+	return true, nil
 }

@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
 	managed "github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -201,7 +201,7 @@ func TestObserve(t *testing.T) {
 			wantCalls: 1,
 			want: want{
 				exists:          true,
-				upToDate:        true,
+				upToDate:        false,
 				readyStatus:     corev1.ConditionFalse,
 				readyReason:     xpv2.ReasonUnavailable,
 				networkingReady: false,
@@ -311,10 +311,10 @@ func TestObserve(t *testing.T) {
 				},
 			},
 		},
-		"EnvDriftIsSurfacedInStatusButStaysUpToDate": {
-			// Pods are immutable in the RunPod API: reporting not-up-to-date
-			// would make the reconciler call a no-op Update() forever. Drift
-			// is surfaced via status.atProvider.driftDetected instead.
+		"EnvDriftIsPatchableAndNotUpToDate": {
+			// env is a PATCHable field now: drift means ResourceUpToDate is
+			// false so Update() runs, but DriftDetected stays false because
+			// it now covers only immutable-field drift.
 			externalName: "pod-123",
 			spec: v1alpha1.PodParameters{
 				Env: []v1alpha1.EnvVar{{Name: "MODE", Value: "dev"}},
@@ -325,11 +325,227 @@ func TestObserve(t *testing.T) {
 			wantCalls:  1,
 			want: want{
 				exists:          true,
-				upToDate:        true,
-				driftDetected:   true,
+				upToDate:        false,
+				driftDetected:   false,
 				readyStatus:     corev1.ConditionTrue,
 				readyReason:     xpv2.ReasonAvailable,
 				networkingReady: true,
+				podID:           "pod-123",
+				connection: managed.ConnectionDetails{
+					"podId": []byte("pod-123"),
+				},
+			},
+		},
+		"ImageNameDriftIsNotUpToDate": {
+			externalName: "pod-123",
+			spec: v1alpha1.PodParameters{
+				ImageName: strPtr("img:v2"),
+			},
+			status:     v1alpha1.PodObservation{PodID: "existing"},
+			statusCode: http.StatusOK,
+			response: &runpodclient.PodResponse{
+				ID:            "pod-123",
+				DesiredStatus: "RUNNING",
+				Image:         "img:v1",
+			},
+			wantCalls: 1,
+			want: want{
+				exists:          true,
+				upToDate:        false,
+				driftDetected:   false,
+				readyStatus:     corev1.ConditionFalse,
+				readyReason:     xpv2.ReasonCreating,
+				networkingReady: false,
+				podID:           "pod-123",
+				connection: managed.ConnectionDetails{
+					"podId": []byte("pod-123"),
+				},
+			},
+		},
+		"NoDriftNoLifecycleMismatchIsUpToDate": {
+			externalName: "pod-123",
+			status:       v1alpha1.PodObservation{PodID: "existing"},
+			statusCode:   http.StatusOK,
+			response:     readyResponse,
+			wantCalls:    1,
+			want: want{
+				exists:          true,
+				upToDate:        true,
+				driftDetected:   false,
+				readyStatus:     corev1.ConditionTrue,
+				readyReason:     xpv2.ReasonAvailable,
+				networkingReady: true,
+				podID:           "pod-123",
+				connection: managed.ConnectionDetails{
+					"podId": []byte("pod-123"),
+				},
+			},
+		},
+		"GPUTypeDriftIsImmutableAndUpToDateButFlagged": {
+			// GPU type is not PATCHable: divergence is surfaced only via
+			// status.atProvider.driftDetected, never via ResourceUpToDate.
+			externalName: "pod-123",
+			spec: v1alpha1.PodParameters{
+				GPUTypeIDs: []string{"NVIDIA L4"},
+			},
+			status:     v1alpha1.PodObservation{PodID: "existing"},
+			statusCode: http.StatusOK,
+			response: &runpodclient.PodResponse{
+				ID:            "pod-123",
+				DesiredStatus: "RUNNING",
+				Machine: struct {
+					GPUDisplayName string `json:"gpuDisplayName"`
+					GPUTypeID      string `json:"gpuTypeId"`
+				}{
+					GPUTypeID: "NVIDIA RTX A4000",
+				},
+			},
+			wantCalls: 1,
+			want: want{
+				exists:          true,
+				upToDate:        true,
+				driftDetected:   true,
+				readyStatus:     corev1.ConditionFalse,
+				readyReason:     xpv2.ReasonCreating,
+				networkingReady: false,
+				podID:           "pod-123",
+				connection: managed.ConnectionDetails{
+					"podId": []byte("pod-123"),
+				},
+			},
+		},
+		"GPUTypeMatchingOneOfPriorityListIsNotDrift": {
+			// gpuTypeIds is a priority-ordered list: membership, not
+			// equality with the first element, is the correct check.
+			externalName: "pod-123",
+			spec: v1alpha1.PodParameters{
+				GPUTypeIDs: []string{"NVIDIA RTX A4000", "NVIDIA L4"},
+			},
+			status:     v1alpha1.PodObservation{PodID: "existing"},
+			statusCode: http.StatusOK,
+			response: &runpodclient.PodResponse{
+				ID:            "pod-123",
+				DesiredStatus: "RUNNING",
+				Machine: struct {
+					GPUDisplayName string `json:"gpuDisplayName"`
+					GPUTypeID      string `json:"gpuTypeId"`
+				}{
+					GPUTypeID: "NVIDIA L4",
+				},
+			},
+			wantCalls: 1,
+			want: want{
+				exists:          true,
+				upToDate:        true,
+				driftDetected:   false,
+				readyStatus:     corev1.ConditionFalse,
+				readyReason:     xpv2.ReasonCreating,
+				networkingReady: false,
+				podID:           "pod-123",
+				connection: managed.ConnectionDetails{
+					"podId": []byte("pod-123"),
+				},
+			},
+		},
+		"InterruptibleDriftIsImmutableAndFlagged": {
+			externalName: "pod-123",
+			spec: v1alpha1.PodParameters{
+				Interruptible: ptrBool(true),
+			},
+			status:     v1alpha1.PodObservation{PodID: "existing"},
+			statusCode: http.StatusOK,
+			response: &runpodclient.PodResponse{
+				ID:            "pod-123",
+				DesiredStatus: "RUNNING",
+				Interruptible: false,
+			},
+			wantCalls: 1,
+			want: want{
+				exists:          true,
+				upToDate:        true,
+				driftDetected:   true,
+				readyStatus:     corev1.ConditionFalse,
+				readyReason:     xpv2.ReasonCreating,
+				networkingReady: false,
+				podID:           "pod-123",
+				connection: managed.ConnectionDetails{
+					"podId": []byte("pod-123"),
+				},
+			},
+		},
+		"LifecycleDriftExitedSpecVsRunningObservedIsNotUpToDate": {
+			externalName: "pod-123",
+			spec: v1alpha1.PodParameters{
+				DesiredState: strPtr("EXITED"),
+			},
+			status:     v1alpha1.PodObservation{PodID: "existing"},
+			statusCode: http.StatusOK,
+			response: &runpodclient.PodResponse{
+				ID:            "pod-123",
+				DesiredStatus: "RUNNING",
+			},
+			wantCalls: 1,
+			want: want{
+				exists:          true,
+				upToDate:        false,
+				driftDetected:   false,
+				readyStatus:     corev1.ConditionFalse,
+				readyReason:     xpv2.ReasonCreating,
+				networkingReady: false,
+				podID:           "pod-123",
+				connection: managed.ConnectionDetails{
+					"podId": []byte("pod-123"),
+				},
+			},
+		},
+		"LifecycleDriftRunningSpecVsExitedObservedIsNotUpToDate": {
+			externalName: "pod-123",
+			spec: v1alpha1.PodParameters{
+				DesiredState: strPtr("RUNNING"),
+			},
+			status:     v1alpha1.PodObservation{PodID: "existing"},
+			statusCode: http.StatusOK,
+			response: &runpodclient.PodResponse{
+				ID:            "pod-123",
+				DesiredStatus: "EXITED",
+			},
+			wantCalls: 1,
+			want: want{
+				exists:          true,
+				upToDate:        false,
+				driftDetected:   false,
+				readyStatus:     corev1.ConditionFalse,
+				readyReason:     xpv2.ReasonUnavailable,
+				networkingReady: false,
+				podID:           "pod-123",
+				connection: managed.ConnectionDetails{
+					"podId": []byte("pod-123"),
+				},
+			},
+		},
+		"DesiredStateExitedMatchingResponseIsAvailableAndUpToDate": {
+			// Stopped-by-request IS the desired state: this must be
+			// Available, not Unavailable, and recreateOnTerminate must not
+			// fire even though it's set.
+			externalName: "pod-123",
+			spec: v1alpha1.PodParameters{
+				DesiredState:        strPtr("EXITED"),
+				RecreateOnTerminate: ptrBool(true),
+			},
+			status:     v1alpha1.PodObservation{PodID: "existing"},
+			statusCode: http.StatusOK,
+			response: &runpodclient.PodResponse{
+				ID:            "pod-123",
+				DesiredStatus: "EXITED",
+			},
+			wantCalls: 1,
+			want: want{
+				exists:          true,
+				upToDate:        true,
+				driftDetected:   false,
+				readyStatus:     corev1.ConditionTrue,
+				readyReason:     xpv2.ReasonAvailable,
+				networkingReady: false,
 				podID:           "pod-123",
 				connection: managed.ConnectionDetails{
 					"podId": []byte("pod-123"),
@@ -354,7 +570,7 @@ func TestObserve(t *testing.T) {
 				},
 			},
 		},
-		"PortsDriftIsSurfacedInStatusButStaysUpToDate": {
+		"PortsDriftIsPatchableAndNotUpToDate": {
 			externalName: "pod-123",
 			spec: v1alpha1.PodParameters{
 				Ports: []v1alpha1.Port{{Number: 9999, Protocol: "http"}},
@@ -365,8 +581,8 @@ func TestObserve(t *testing.T) {
 			wantCalls:  1,
 			want: want{
 				exists:          true,
-				upToDate:        true,
-				driftDetected:   true,
+				upToDate:        false,
+				driftDetected:   false,
 				readyStatus:     corev1.ConditionTrue,
 				readyReason:     xpv2.ReasonAvailable,
 				networkingReady: true,
@@ -825,14 +1041,137 @@ func TestObserveRecreateOnTerminate(t *testing.T) {
 }
 
 func TestUpdate(t *testing.T) {
-	e := &external{log: logr.Discard()}
-	got, err := e.Update(context.Background(), &v1alpha1.Pod{})
-	if err != nil {
-		t.Fatalf("Update() error = %v", err)
+	newPod := func(spec v1alpha1.PodParameters) *v1alpha1.Pod {
+		p := &v1alpha1.Pod{Spec: v1alpha1.PodSpec{ForProvider: spec}}
+		meta.SetExternalName(p, "pod-123")
+		return p
 	}
-	if !reflect.DeepEqual(got, managed.ExternalUpdate{}) {
-		t.Fatalf("Update() = %#v, want empty update", got)
-	}
+
+	t.Run("PatchesMutableFieldsOnlyNoLifecycleCallWhenStatesMatch", func(t *testing.T) {
+		var requests []string
+		var gotPatchBody runpodclient.UpdatePodRequest
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requests = append(requests, r.Method+" "+r.URL.Path)
+			switch r.Method {
+			case http.MethodGet:
+				_ = json.NewEncoder(w).Encode(&runpodclient.PodResponse{
+					ID:            "pod-123",
+					DesiredStatus: "RUNNING",
+					Image:         "img:v1",
+				})
+			case http.MethodPatch:
+				if err := json.NewDecoder(r.Body).Decode(&gotPatchBody); err != nil {
+					t.Fatalf("decode PATCH body: %v", err)
+				}
+				w.WriteHeader(http.StatusOK)
+			default:
+				t.Fatalf("unexpected method: %s", r.Method)
+			}
+		}))
+		defer server.Close()
+
+		p := newPod(v1alpha1.PodParameters{ImageName: strPtr("img:v2")})
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+
+		got, err := e.Update(context.Background(), p)
+		if err != nil {
+			t.Fatalf("Update() error = %v", err)
+		}
+		if !reflect.DeepEqual(got, managed.ExternalUpdate{}) {
+			t.Fatalf("Update() = %#v, want empty update", got)
+		}
+		if !reflect.DeepEqual(requests, []string{"GET /pods/pod-123", "PATCH /pods/pod-123"}) {
+			t.Fatalf("Update() requests = %v, want GET then PATCH only (no lifecycle call)", requests)
+		}
+		if gotPatchBody.ImageName == nil || *gotPatchBody.ImageName != "img:v2" {
+			t.Fatalf("Update() PATCH imageName = %#v, want %q", gotPatchBody.ImageName, "img:v2")
+		}
+	})
+
+	t.Run("StopsPodWhenDesiredStateExitedAndObservedRunning", func(t *testing.T) {
+		var requests []string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requests = append(requests, r.Method+" "+r.URL.Path)
+			switch {
+			case r.Method == http.MethodGet:
+				_ = json.NewEncoder(w).Encode(&runpodclient.PodResponse{
+					ID:            "pod-123",
+					DesiredStatus: "RUNNING",
+				})
+			case r.Method == http.MethodPatch:
+				w.WriteHeader(http.StatusOK)
+			case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/stop"):
+				w.WriteHeader(http.StatusOK)
+			default:
+				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			}
+		}))
+		defer server.Close()
+
+		p := newPod(v1alpha1.PodParameters{
+			ImageName:    strPtr("img:v2"),
+			DesiredState: strPtr("EXITED"),
+		})
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+
+		if _, err := e.Update(context.Background(), p); err != nil {
+			t.Fatalf("Update() error = %v", err)
+		}
+		want := []string{"GET /pods/pod-123", "PATCH /pods/pod-123", "POST /pods/pod-123/stop"}
+		if !reflect.DeepEqual(requests, want) {
+			t.Fatalf("Update() requests = %v, want %v (PATCH before stop)", requests, want)
+		}
+	})
+
+	t.Run("StartsPodWhenDesiredStateRunningOrUnsetAndObservedExited", func(t *testing.T) {
+		var requests []string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requests = append(requests, r.Method+" "+r.URL.Path)
+			switch {
+			case r.Method == http.MethodGet:
+				_ = json.NewEncoder(w).Encode(&runpodclient.PodResponse{
+					ID:            "pod-123",
+					DesiredStatus: "EXITED",
+				})
+			case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/start"):
+				w.WriteHeader(http.StatusOK)
+			default:
+				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			}
+		}))
+		defer server.Close()
+
+		p := newPod(v1alpha1.PodParameters{})
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+
+		if _, err := e.Update(context.Background(), p); err != nil {
+			t.Fatalf("Update() error = %v", err)
+		}
+		want := []string{"GET /pods/pod-123", "POST /pods/pod-123/start"}
+		if !reflect.DeepEqual(requests, want) {
+			t.Fatalf("Update() requests = %v, want %v", requests, want)
+		}
+	})
+
+	t.Run("EmptyExternalNameSkipsHTTPCall", func(t *testing.T) {
+		var calls int
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+		}))
+		defer server.Close()
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+		got, err := e.Update(context.Background(), &v1alpha1.Pod{})
+		if err != nil {
+			t.Fatalf("Update() error = %v", err)
+		}
+		if !reflect.DeepEqual(got, managed.ExternalUpdate{}) {
+			t.Fatalf("Update() = %#v, want empty update", got)
+		}
+		if calls != 0 {
+			t.Fatalf("Update() HTTP calls = %d, want 0", calls)
+		}
+	})
 }
 
 func TestHasEnvDrift(t *testing.T) {
@@ -1012,3 +1351,5 @@ func stubProbe(up bool) func(context.Context, string) bool {
 }
 
 func ptrBool(b bool) *bool { return &b }
+
+func strPtr(s string) *string { return &s }

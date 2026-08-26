@@ -286,6 +286,66 @@ Important caveats:
 - The docs mention initialization windows where `publicIp` and `portMappings` are still empty, but they do not expose a distinct initialization status in the REST `desiredStatus` enum.
 - Because of that, a controller should treat networking readiness as separate from lifecycle state.
 
+## Pod update & lifecycle
+
+Added when the provider implemented in-place `Pod` update and start/stop
+lifecycle control (v0.5.0).
+
+### Pod Update
+
+- Method: `PATCH`
+- Path: `/pods/{podId}`
+- Full URL: `https://rest.runpod.io/v1/pods/{podId}`
+- Success response: `200 OK`, body is the same `Pod` schema as `GET`.
+
+PATCHable fields, as implemented by this provider's client
+(`UpdatePodRequest` in `internal/clients/runpod.go`):
+
+- `name`
+- `imageName`
+- `containerDiskInGb`
+- `volumeInGb`
+- `volumeMountPath`
+- `env`
+- `ports`
+- `dockerStartCmd`
+- `dockerEntrypoint`
+- `locked`
+- `globalNetworking`
+- `containerRegistryAuthId`
+
+`gpuTypeIds`/`gpuCount` and `interruptible` are **not** in this list — the
+provider treats them as immutable and drift on those fields triggers
+replacement rather than an update.
+
+Container-level changes (image, env, docker start cmd/entrypoint,
+container disk, ...) are staged by RunPod but only take effect the next
+time the pod (re)starts — a running pod keeps its current container state
+until it is stopped and started again, or replaced. This mirrors the
+`Endpoint` template behavior: PATCHing does not recycle a live workload by
+itself.
+
+### Pod start/stop
+
+- `POST /pods/{podId}/start` — starts or resumes a stopped pod. Maps to
+  `spec.forProvider.desiredState: RUNNING` (also the default when
+  `desiredState` is unset).
+- `POST /pods/{podId}/stop` — stops a running pod without deleting it; the
+  pod keeps its volume and continues billing storage (not compute) while
+  stopped. Maps to `spec.forProvider.desiredState: EXITED`.
+
+`desiredState` only drives this RUNNING/EXITED toggle; it does not
+participate in `TERMINATED`, which is only reachable via `DELETE
+/pods/{podId}`.
+
+### Unchanged: only 404 is absent
+
+Per the existing Pod Delete/observe guidance above, `GET /pods/{podId}`
+returning `404` is the sole signal this provider treats as "resource does
+not exist" for Observe; the same holds for `PATCH` and the start/stop
+actions — any other non-2xx status (including on `/start` and `/stop`) is
+surfaced as an error rather than treated as absence.
+
 ## Sources
 
 - RunPod REST API overview: https://docs.runpod.io/api-reference/overview

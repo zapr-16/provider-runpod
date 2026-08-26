@@ -26,3 +26,23 @@ spec:
     ports:
       - number: 8888
         protocol: http
+    # Additional knobs supported by the Pod CRD (uncomment as needed):
+    #
+    # desiredState drives the lifecycle: RUNNING starts/resumes the pod,
+    # EXITED stops it while keeping its volume (storage keeps billing).
+    # Unset means RUNNING.
+    # desiredState: EXITED
+    #
+    # Rent interruptible (Spot) capacity: cheaper, may be reclaimed.
+    # Combine with recreateOnTerminate for auto-replacement.
+    # interruptible: true
+    #
+    # Attach a pre-existing network volume (must be in the same data center).
+    # networkVolumeId: YOUR_NETWORK_VOLUME_ID
+    #
+    # Authenticate against a private container registry.
+    # containerRegistryAuthId: YOUR_CONTAINER_REGISTRY_AUTH_ID
+    #
+    # Create the pod from a RunPod template; fields set directly above
+    # override the template's values server-side.
+    # templateId: YOUR_TEMPLATE_ID

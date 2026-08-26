@@ -4,22 +4,22 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.20.1
-  name: pods.runpod.crossplane.io
+  name: templates.runpod.crossplane.io
 spec:
   group: runpod.crossplane.io
   names:
     categories:
     - crossplane
-    kind: Pod
-    listKind: PodList
-    plural: pods
-    singular: pod
+    kind: Template
+    listKind: TemplateList
+    plural: templates
+    singular: template
   scope: Namespaced
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: A Pod is a managed RunPod GPU workload.
+        description: A Template is a standalone managed RunPod template.
         properties:
           apiVersion:
             description: |-
@@ -39,27 +39,15 @@ spec:
           metadata:
             type: object
           spec:
-            description: PodSpec defines the desired state of a RunPod Pod resource.
+            description: TemplateSpec defines the desired state of a RunPod Template
+              resource.
             properties:
               forProvider:
-                description: PodParameters define the desired state inputs for a RunPod
-                  pod.
+                description: |-
+                  TemplateParameters define the desired state of a standalone RunPod
+                  template (as distinct from the implicit template RunPod creates for a
+                  serverless Endpoint).
                 properties:
-                  allowedCudaVersions:
-                    description: Acceptable CUDA versions on the host.
-                    items:
-                      type: string
-                    type: array
-                  cloudType:
-                    description: RunPod cloud class for scheduling, limited to SECURE
-                      or COMMUNITY.
-                    type: string
-                  computeType:
-                    description: GPU vs CPU pod. Defaults to GPU server-side.
-                    enum:
-                    - GPU
-                    - CPU
-                    type: string
                   containerDiskInGb:
                     description: Size of the ephemeral container disk in GiB.
                     format: int32
@@ -67,43 +55,6 @@ spec:
                   containerRegistryAuthId:
                     description: ID of a ContainerRegistryAuth for pulling private
                       images.
-                    type: string
-                  countryCodes:
-                    description: Restrict placement to specific countries (ISO codes).
-                    items:
-                      type: string
-                    type: array
-                  cpuFlavorIds:
-                    description: Acceptable CPU flavor IDs (CPU pods).
-                    items:
-                      type: string
-                    type: array
-                  cpuFlavorPriority:
-                    description: 'CPU flavor selection strategy: availability or custom.'
-                    enum:
-                    - availability
-                    - custom
-                    type: string
-                  dataCenterIds:
-                    description: Restrict placement to specific data center IDs.
-                    items:
-                      type: string
-                    type: array
-                  dataCenterPriority:
-                    description: 'Data center selection strategy: availability or
-                      custom.'
-                    enum:
-                    - availability
-                    - custom
-                    type: string
-                  desiredState:
-                    description: |-
-                      DesiredState drives the pod lifecycle: RUNNING starts/resumes the
-                      pod, EXITED stops it (storage keeps billing while stopped).
-                      Unset means RUNNING.
-                    enum:
-                    - RUNNING
-                    - EXITED
                     type: string
                   dockerEntrypoint:
                     description: Entrypoint array overriding the image ENTRYPOINT.
@@ -132,62 +83,18 @@ spec:
                       - value
                       type: object
                     type: array
-                  globalNetworking:
-                    description: |-
-                      Enable RunPod global networking for the pod.
-                      Write-only: the API accepts it but does not echo it back.
-                    type: boolean
-                  gpuCount:
-                    description: Number of GPUs requested for the pod.
-                    format: int32
-                    type: integer
-                  gpuTypeIds:
-                    description: Ordered set of acceptable RunPod GPU type IDs for
-                      placement.
-                    items:
-                      type: string
-                    type: array
-                  gpuTypePriority:
-                    description: 'GPU type selection strategy: availability or custom.'
-                    enum:
-                    - availability
-                    - custom
-                    type: string
                   imageName:
-                    description: Container image to run for the pod workload.
+                    description: Container image to run for the template.
                     type: string
-                  interruptible:
+                  isServerless:
                     description: |-
-                      Rent interruptible (Spot) capacity: cheaper, may be reclaimed.
-                      Combine with recreateOnTerminate for auto-replacement.
+                      Marks the template for use by serverless workers. The RunPod PATCH
+                      schema has no isServerless field, so this cannot be reconciled after
+                      creation.
                     type: boolean
-                  locked:
-                    description: Prevent the pod from being modified or deleted from
-                      the RunPod console.
-                    type: boolean
-                  minDiskBandwidthMBps:
-                    description: Minimum disk bandwidth in MBps.
-                    format: int32
-                    type: integer
-                  minDownloadMbps:
-                    description: Minimum download bandwidth in Mbps.
-                    format: int32
-                    type: integer
-                  minRAMPerGPU:
-                    description: Minimum RAM per GPU in GB.
-                    format: int32
-                    type: integer
-                  minUploadMbps:
-                    description: Minimum upload bandwidth in Mbps.
-                    format: int32
-                    type: integer
-                  minVCPUPerGPU:
-                    description: Minimum vCPUs per GPU.
-                    format: int32
-                    type: integer
-                  networkVolumeId:
-                    description: Network volume to attach (must be in the same data
-                      center).
+                  name:
+                    description: Template name shown in the RunPod console. Defaults
+                      to the resource name.
                     type: string
                   ports:
                     description: Container ports to expose, later serialized to RunPod
@@ -204,41 +111,16 @@ spec:
                       - number
                       type: object
                     type: array
-                  recreateOnTerminate:
-                    description: |-
-                      RecreateOnTerminate causes the controller to clear the external
-                      name and report the resource as missing whenever RunPod marks
-                      the pod EXITED or TERMINATED (e.g. Spot reclaim, OOM, manual
-                      console delete). Crossplane's next reconcile will then call
-                      Create() and provision a fresh pod with the same spec. Useful
-                      for Spot-backed workloads where occasional reclaim is expected
-                      and continuous availability is preferred over preserving the
-                      specific instance. Defaults to false (manual recreate).
-                    type: boolean
-                  supportPublicIp:
-                    description: Request a public IP for COMMUNITY cloud pods so exposed
-                      ports receive external mappings.
-                    type: boolean
-                  templateId:
-                    description: |-
-                      RunPod template to create the pod from. Direct fields set here
-                      override template values server-side.
-                    type: string
-                  vcpuCount:
-                    description: Number of vCPUs (CPU pods).
-                    format: int32
-                    type: integer
-                  volumeEncrypted:
-                    description: Encrypt the pod volume.
-                    type: boolean
                   volumeInGb:
-                    description: Size of the persisted pod volume in GiB.
+                    description: Size of the persisted volume in GiB.
                     format: int32
                     type: integer
                   volumeMountPath:
                     description: Mount path inside the container for the persisted
-                      pod volume.
+                      volume.
                     type: string
+                required:
+                - imageName
                 type: object
               managementPolicies:
                 default:
@@ -299,64 +181,17 @@ spec:
             - forProvider
             type: object
           status:
-            description: PodStatus reflects the observed state of a RunPod Pod resource.
+            description: TemplateStatus reflects the observed state of a RunPod Template
+              resource.
             properties:
               atProvider:
-                description: PodObservation captures the observed state returned by
-                  RunPod.
+                description: TemplateObservation captures the observed state returned
+                  by RunPod.
                 properties:
-                  costPerHr:
-                    description: Effective hourly pod cost from the RunPod observation
-                      response.
-                    type: number
-                  desiredStatus:
-                    description: Raw RunPod lifecycle status from GET /pods/{podId}.
+                  name:
                     type: string
-                  driftDetected:
-                    description: |-
-                      True when immutable spec fields diverge from the running pod
-                      (currently: observed GPU type not in gpuTypeIds, or interruptible
-                      mismatch). Immutable drift can only come from spec edits after
-                      creation and can never be reconciled in place. Mutable-field drift
-                      is reconciled via PATCH instead and never appears here.
-                    type: boolean
-                  gpuDisplayName:
-                    description: Human-readable GPU name from machine.gpuDisplayName,
-                      or from the nested GPU object as fallback.
+                  templateId:
                     type: string
-                  lastStartedAt:
-                    description: Timestamp of the last pod start event, parsed from
-                      the RunPod response.
-                    format: date-time
-                    type: string
-                  networkingReady:
-                    description: |-
-                      Derived readiness flag, true when a connection endpoint is resolvable:
-                      either an HTTP proxy URL or a public IP with port mappings.
-                    type: boolean
-                  podId:
-                    description: RunPod pod ID returned by create and mirrored from
-                      the external name.
-                    type: string
-                  portMappings:
-                    additionalProperties:
-                      format: int32
-                      type: integer
-                    description: External port numbers keyed by RunPod port token,
-                      absent during networking initialization.
-                    type: object
-                  publicIp:
-                    description: Public IP assigned to the pod once networking is
-                      ready.
-                    type: string
-                  runtimeEndpoint:
-                    description: |-
-                      Derived endpoint URL for the first HTTP port, served through RunPod's
-                      TLS proxy (https://{podId}-{port}.proxy.runpod.net). Present as soon as
-                      the pod ID is known; the proxy returns 502 until the workload listens.
-                    type: string
-                required:
-                - networkingReady
                 type: object
               conditions:
                 description: Conditions of the resource.

@@ -1,4 +1,4 @@
-package pod
+package containerregistryauth
 
 import (
 	"context"
@@ -17,9 +17,9 @@ import (
 )
 
 const (
-	errNotPod                = "managed resource is not a Pod"
-	errMissingProviderConfig = "pod is missing providerConfigRef"
-	errTrackUsage            = "cannot track ProviderConfigUsage"
+	errNotContainerRegistryAuth = "managed resource is not a ContainerRegistryAuth"
+	errMissingProviderConfig    = "container registry auth is missing providerConfigRef"
+	errTrackUsage               = "cannot track ProviderConfigUsage"
 )
 
 type connector struct {
@@ -29,41 +29,43 @@ type connector struct {
 }
 
 func (c *connector) Connect(ctx context.Context, mg xpresource.Managed) (managed.ExternalClient, error) {
-	pod, ok := mg.(*v1alpha1.Pod)
+	cra, ok := mg.(*v1alpha1.ContainerRegistryAuth)
 	if !ok {
-		return nil, errors.New(errNotPod)
+		return nil, errors.New(errNotContainerRegistryAuth)
 	}
 
-	ref := pod.GetProviderConfigReference()
+	ref := cra.GetProviderConfigReference()
 	if ref == nil || ref.Name == "" {
 		return nil, errors.New(errMissingProviderConfig)
 	}
+
 	runpodclient.NormalizeProviderConfigRefKind(ref)
 
 	// Record the usage so Crossplane's in-use protection blocks deletion
-	// of the ProviderConfig while this Pod still needs it.
-	if err := c.usage.Track(ctx, pod); err != nil {
+	// of the ProviderConfig while this ContainerRegistryAuth still needs it.
+	if err := c.usage.Track(ctx, cra); err != nil {
 		return nil, errors.Wrap(err, errTrackUsage)
 	}
 
-	rc, err := runpodclient.ClientForProviderConfigRef(ctx, c.kube, pod.GetNamespace(), *ref)
+	rc, err := runpodclient.ClientForProviderConfigRef(ctx, c.kube, cra.GetNamespace(), *ref)
 	if err != nil {
 		return nil, err
 	}
 
 	return &external{
-		client:    rc,
-		log:       c.log.WithValues("pod", pod.GetName()),
-		probeHTTP: defaultHTTPProbe,
+		client: rc,
+		kube:   c.kube,
+		log:    c.log.WithValues("containerregistryauth", cra.GetName()),
 	}, nil
 }
 
-// Setup registers the Pod managed-resource controller with the manager.
+// Setup registers the ContainerRegistryAuth managed-resource controller
+// with the manager.
 func Setup(mgr ctrl.Manager, log logr.Logger) error {
 	conn := &connector{
 		kube:  mgr.GetClient(),
 		usage: xpresource.NewProviderConfigUsageTracker(mgr.GetClient(), &v1beta1.ProviderConfigUsage{}),
 		log:   log,
 	}
-	return register.ManagedController(mgr, "Pod", &v1alpha1.Pod{}, conn, log)
+	return register.ManagedController(mgr, "ContainerRegistryAuth", &v1alpha1.ContainerRegistryAuth{}, conn, log)
 }

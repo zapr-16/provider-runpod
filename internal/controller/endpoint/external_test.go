@@ -42,28 +42,34 @@ func readyResponse() *runpodclient.EndpointResponse {
 
 func templateResponse() *runpodclient.TemplateResponse {
 	return &runpodclient.TemplateResponse{
-		ID:                "tpl-xyz",
-		ImageName:         "runpod/worker-v1-vllm:stable",
-		IsServerless:      true,
-		Env:               map[string]string{"MODEL_NAME": "Qwen/Qwen2.5-Coder-7B-Instruct"},
-		ContainerDiskInGb: 30,
+		ID:                      "tpl-xyz",
+		ImageName:               "runpod/worker-v1-vllm:stable",
+		IsServerless:            true,
+		Env:                     map[string]string{"MODEL_NAME": "Qwen/Qwen2.5-Coder-7B-Instruct"},
+		ContainerDiskInGb:       30,
+		DockerStartCmd:          []string{"python", "run.py"},
+		DockerEntrypoint:        []string{"/bin/sh"},
+		ContainerRegistryAuthID: "auth-1",
 	}
 }
 
 func matchingSpec() v1alpha1.EndpointParameters {
 	scaler := v1alpha1.ScalerTypeQueueDelay
 	return v1alpha1.EndpointParameters{
-		ImageName:         "runpod/worker-v1-vllm:stable",
-		Env:               []v1alpha1.EnvVar{{Name: "MODEL_NAME", Value: "Qwen/Qwen2.5-Coder-7B-Instruct"}},
-		ContainerDiskInGb: ptrInt32(30),
-		GPUTypeIDs:        []string{"NVIDIA GeForce RTX 3090"},
-		GPUCount:          ptrInt32(1),
-		WorkersMin:        ptrInt32(0),
-		WorkersMax:        ptrInt32(2),
-		IdleTimeout:       ptrInt32(60),
-		FlashBoot:         ptrBool(true),
-		ScalerType:        &scaler,
-		ScalerValue:       ptrInt32(4),
+		ImageName:               ptrString("runpod/worker-v1-vllm:stable"),
+		Env:                     []v1alpha1.EnvVar{{Name: "MODEL_NAME", Value: "Qwen/Qwen2.5-Coder-7B-Instruct"}},
+		ContainerDiskInGb:       ptrInt32(30),
+		GPUTypeIDs:              []string{"NVIDIA GeForce RTX 3090"},
+		GPUCount:                ptrInt32(1),
+		WorkersMin:              ptrInt32(0),
+		WorkersMax:              ptrInt32(2),
+		IdleTimeout:             ptrInt32(60),
+		FlashBoot:               ptrBool(true),
+		ScalerType:              &scaler,
+		ScalerValue:             ptrInt32(4),
+		DockerStartCmd:          []string{"python", "run.py"},
+		DockerEntrypoint:        []string{"/bin/sh"},
+		ContainerRegistryAuthID: ptrString("auth-1"),
 	}
 }
 
@@ -216,7 +222,7 @@ func TestObserve(t *testing.T) {
 			externalName: "ep-123",
 			spec: func() v1alpha1.EndpointParameters {
 				s := matchingSpec()
-				s.ImageName = "runpod/worker-v1-vllm:dev"
+				s.ImageName = ptrString("runpod/worker-v1-vllm:dev")
 				return s
 			},
 			statusCode: http.StatusOK,
@@ -238,7 +244,7 @@ func TestObserve(t *testing.T) {
 		"NilOptionalFieldsDoNotDrift": {
 			externalName: "ep-123",
 			spec: func() v1alpha1.EndpointParameters {
-				return v1alpha1.EndpointParameters{ImageName: "runpod/worker-v1-vllm:stable"}
+				return v1alpha1.EndpointParameters{ImageName: ptrString("runpod/worker-v1-vllm:stable")}
 			},
 			statusCode: http.StatusOK,
 			response:   readyResponse(),
@@ -249,6 +255,54 @@ func TestObserve(t *testing.T) {
 				readyStatus:  corev1.ConditionTrue,
 				endpointID:   "ep-123",
 				templateID:   "tpl-xyz",
+				runtime:      "https://api.runpod.ai/v2/ep-123",
+				openAI:       "https://api.runpod.ai/v2/ep-123/openai/v1",
+				workersReady: 1,
+				workersTotal: 2,
+				connection:   wantConnection(),
+			},
+		},
+		// Scenario 2: templateId mode skips the implicit-template drift GET
+		// entirely; drift is just observed.templateId vs spec.templateId.
+		"TemplateModeMatchingTemplateIDIsUpToDate": {
+			externalName: "ep-123",
+			spec: func() v1alpha1.EndpointParameters {
+				return v1alpha1.EndpointParameters{TemplateID: ptrString("tpl-xyz")}
+			},
+			statusCode: http.StatusOK,
+			response:   readyResponse(),
+			wantCalls:  1,
+			want: want{
+				exists:       true,
+				upToDate:     true,
+				readyStatus:  corev1.ConditionTrue,
+				endpointID:   "ep-123",
+				templateID:   "tpl-xyz",
+				runtime:      "https://api.runpod.ai/v2/ep-123",
+				openAI:       "https://api.runpod.ai/v2/ep-123/openai/v1",
+				workersReady: 1,
+				workersTotal: 2,
+				connection:   wantConnection(),
+			},
+		},
+		"TemplateModeMismatchedTemplateIDIsNotUpToDate": {
+			externalName: "ep-123",
+			spec: func() v1alpha1.EndpointParameters {
+				return v1alpha1.EndpointParameters{TemplateID: ptrString("tpl-new")}
+			},
+			statusCode: http.StatusOK,
+			response: func() *runpodclient.EndpointResponse {
+				r := readyResponse()
+				r.TemplateID = "tpl-old"
+				return r
+			}(),
+			wantCalls: 1,
+			want: want{
+				exists:       true,
+				upToDate:     false,
+				readyStatus:  corev1.ConditionTrue,
+				endpointID:   "ep-123",
+				templateID:   "tpl-old",
 				runtime:      "https://api.runpod.ai/v2/ep-123",
 				openAI:       "https://api.runpod.ai/v2/ep-123/openai/v1",
 				workersReady: 1,
@@ -386,9 +440,20 @@ func TestCreate(t *testing.T) {
 		}))
 		defer server.Close()
 
+		spec := matchingSpec()
+		spec.ComputeType = ptrString("CPU")
+		spec.VCPUCount = ptrInt32(4)
+		spec.CPUFlavorIDs = []string{"cpu3c"}
+		spec.AllowedCudaVersions = []string{"12.1"}
+		spec.MinCudaVersion = ptrString("11.8")
+		spec.NetworkVolumeIDs = []string{"nv-1", "nv-2"}
+		spec.DockerStartCmd = []string{"python", "run.py"}
+		spec.DockerEntrypoint = []string{"/bin/sh"}
+		spec.ContainerRegistryAuthID = ptrString("auth-1")
+
 		ep := &v1alpha1.Endpoint{
 			ObjectMeta: metav1.ObjectMeta{Name: "vllm-small"},
-			Spec:       v1alpha1.EndpointSpec{ForProvider: matchingSpec()},
+			Spec:       v1alpha1.EndpointSpec{ForProvider: spec},
 		}
 
 		e := &external{client: newTestClient(t, server), log: logr.Discard()}
@@ -430,6 +495,33 @@ func TestCreate(t *testing.T) {
 		if gotEndpoint.ScalerType == nil || *gotEndpoint.ScalerType != "QUEUE_DELAY" {
 			t.Fatalf("Create() endpoint scalerType = %#v", gotEndpoint.ScalerType)
 		}
+		if gotEndpoint.ComputeType == nil || *gotEndpoint.ComputeType != "CPU" {
+			t.Fatalf("Create() endpoint computeType = %#v, want %q", gotEndpoint.ComputeType, "CPU")
+		}
+		if gotEndpoint.VCPUCount == nil || *gotEndpoint.VCPUCount != 4 {
+			t.Fatalf("Create() endpoint vcpuCount = %#v, want 4", gotEndpoint.VCPUCount)
+		}
+		if !reflect.DeepEqual(gotEndpoint.CPUFlavorIDs, []string{"cpu3c"}) {
+			t.Fatalf("Create() endpoint cpuFlavorIds = %#v", gotEndpoint.CPUFlavorIDs)
+		}
+		if !reflect.DeepEqual(gotEndpoint.AllowedCudaVersions, []string{"12.1"}) {
+			t.Fatalf("Create() endpoint allowedCudaVersions = %#v", gotEndpoint.AllowedCudaVersions)
+		}
+		if gotEndpoint.MinCudaVersion == nil || *gotEndpoint.MinCudaVersion != "11.8" {
+			t.Fatalf("Create() endpoint minCudaVersion = %#v", gotEndpoint.MinCudaVersion)
+		}
+		if !reflect.DeepEqual(gotEndpoint.NetworkVolumeIDs, []string{"nv-1", "nv-2"}) {
+			t.Fatalf("Create() endpoint networkVolumeIds = %#v", gotEndpoint.NetworkVolumeIDs)
+		}
+		if !reflect.DeepEqual(gotTemplate.DockerStartCmd, []string{"python", "run.py"}) {
+			t.Fatalf("Create() template dockerStartCmd = %#v", gotTemplate.DockerStartCmd)
+		}
+		if !reflect.DeepEqual(gotTemplate.DockerEntrypoint, []string{"/bin/sh"}) {
+			t.Fatalf("Create() template dockerEntrypoint = %#v", gotTemplate.DockerEntrypoint)
+		}
+		if gotTemplate.ContainerRegistryAuthID == nil || *gotTemplate.ContainerRegistryAuthID != "auth-1" {
+			t.Fatalf("Create() template containerRegistryAuthId = %#v", gotTemplate.ContainerRegistryAuthID)
+		}
 		wantDetails := managed.ConnectionDetails{
 			"endpointId": []byte("ep-created"),
 			"endpoint":   []byte("https://api.runpod.ai/v2/ep-created"),
@@ -447,7 +539,9 @@ func TestCreate(t *testing.T) {
 		defer server.Close()
 
 		e := &external{client: newTestClient(t, server), log: logr.Discard()}
-		_, err := e.Create(context.Background(), &v1alpha1.Endpoint{})
+		_, err := e.Create(context.Background(), &v1alpha1.Endpoint{
+			Spec: v1alpha1.EndpointSpec{ForProvider: v1alpha1.EndpointParameters{ImageName: ptrString("runpod/worker-v1-vllm:stable")}},
+		})
 		if err == nil {
 			t.Fatal("Create() error = nil, want non-nil")
 		}
@@ -474,7 +568,10 @@ func TestCreate(t *testing.T) {
 		defer server.Close()
 
 		e := &external{client: newTestClient(t, server), log: logr.Discard()}
-		_, err := e.Create(context.Background(), &v1alpha1.Endpoint{ObjectMeta: metav1.ObjectMeta{Name: "x"}})
+		_, err := e.Create(context.Background(), &v1alpha1.Endpoint{
+			ObjectMeta: metav1.ObjectMeta{Name: "x"},
+			Spec:       v1alpha1.EndpointSpec{ForProvider: v1alpha1.EndpointParameters{ImageName: ptrString("runpod/worker-v1-vllm:stable")}},
+		})
 		if err == nil {
 			t.Fatal("Create() error = nil, want non-nil")
 		}
@@ -485,31 +582,386 @@ func TestCreate(t *testing.T) {
 			t.Fatal("Create() did not clean up template after endpoint create failure")
 		}
 	})
+
+	t.Run("TemplateModeSkipsTemplateCreate", func(t *testing.T) {
+		// Scenario 1: POST /endpoints carries templateId "tpl-ext" and NO
+		// POST /templates happens.
+		var gotEndpoint runpodclient.CreateEndpointRequest
+		var calls []string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls = append(calls, r.Method+" "+r.URL.Path)
+			if r.Method == http.MethodPost && r.URL.Path == "/endpoints" {
+				if err := json.NewDecoder(r.Body).Decode(&gotEndpoint); err != nil {
+					t.Fatalf("decode endpoint request: %v", err)
+				}
+				_ = json.NewEncoder(w).Encode(map[string]string{"id": "ep-created"})
+				return
+			}
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}))
+		defer server.Close()
+
+		spec := v1alpha1.EndpointParameters{
+			TemplateID: ptrString("tpl-ext"),
+			WorkersMin: ptrInt32(0),
+			WorkersMax: ptrInt32(2),
+		}
+		ep := &v1alpha1.Endpoint{
+			ObjectMeta: metav1.ObjectMeta{Name: "vllm-from-template"},
+			Spec:       v1alpha1.EndpointSpec{ForProvider: spec},
+		}
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+		got, err := e.Create(context.Background(), ep)
+		if err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+
+		want := []string{"POST /endpoints"}
+		if !reflect.DeepEqual(calls, want) {
+			t.Fatalf("Create() calls = %v, want %v", calls, want)
+		}
+		if gotEndpoint.TemplateID != "tpl-ext" {
+			t.Fatalf("Create() endpoint templateId = %q, want %q", gotEndpoint.TemplateID, "tpl-ext")
+		}
+		if meta.GetExternalName(ep) != "ep-created" {
+			t.Fatalf("Create() external name = %q, want %q", meta.GetExternalName(ep), "ep-created")
+		}
+		if got.ConnectionDetails["endpointId"] == nil {
+			t.Fatal("Create() connection details missing endpointId")
+		}
+	})
 }
 
 func TestUpdate(t *testing.T) {
-	t.Run("PatchesEndpointAndTemplate", func(t *testing.T) {
+	t.Run("PatchesEndpointAndTemplateWhenDriftedAndRecyclesWorkers", func(t *testing.T) {
+		// Scenario 5: PATCH /endpoints -> GET /templates (drift check) ->
+		// PATCH /templates/{id} -> PATCH /endpoints{workersMax:0} ->
+		// PATCH /endpoints{workersMax:restore}.
 		var gotEndpoint runpodclient.UpdateEndpointRequest
 		var gotTemplate runpodclient.UpdateTemplateRequest
-		var paths []string
+		var endpointPatchBodies []runpodclient.UpdateEndpointRequest
+		var order []string
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodPatch {
-				t.Fatalf("unexpected method: %s %s", r.Method, r.URL.Path)
-			}
-			paths = append(paths, r.URL.Path)
-			switch r.URL.Path {
-			case "/endpoints/ep-123":
-				if err := json.NewDecoder(r.Body).Decode(&gotEndpoint); err != nil {
+			switch {
+			case r.Method == http.MethodPatch && r.URL.Path == "/endpoints/ep-123":
+				order = append(order, "PATCH /endpoints")
+				var body runpodclient.UpdateEndpointRequest
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 					t.Fatalf("decode endpoint patch: %v", err)
 				}
+				endpointPatchBodies = append(endpointPatchBodies, body)
+				if len(endpointPatchBodies) == 1 {
+					gotEndpoint = body
+				}
 				_ = json.NewEncoder(w).Encode(map[string]string{"id": "ep-123"})
-			case "/templates/tpl-xyz":
+			case r.Method == http.MethodGet && r.URL.Path == "/templates/tpl-xyz":
+				order = append(order, "GET /templates")
+				drifted := templateResponse()
+				drifted.ImageName = "runpod/worker-v1-vllm:old"
+				_ = json.NewEncoder(w).Encode(drifted)
+			case r.Method == http.MethodPatch && r.URL.Path == "/templates/tpl-xyz":
+				order = append(order, "PATCH /templates")
 				if err := json.NewDecoder(r.Body).Decode(&gotTemplate); err != nil {
 					t.Fatalf("decode template patch: %v", err)
 				}
 				_ = json.NewEncoder(w).Encode(map[string]string{"id": "tpl-xyz"})
 			default:
-				t.Fatalf("unexpected path: %s", r.URL.Path)
+				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			}
+		}))
+		defer server.Close()
+
+		spec := matchingSpec()
+		spec.VCPUCount = ptrInt32(4)
+		spec.CPUFlavorIDs = []string{"cpu3c"}
+		spec.AllowedCudaVersions = []string{"12.1"}
+		spec.MinCudaVersion = ptrString("11.8")
+		spec.NetworkVolumeIDs = []string{"nv-1", "nv-2"}
+		spec.DockerStartCmd = []string{"python", "run.py"}
+		spec.DockerEntrypoint = []string{"/bin/sh"}
+		spec.ContainerRegistryAuthID = ptrString("auth-1")
+
+		ep := &v1alpha1.Endpoint{
+			ObjectMeta: metav1.ObjectMeta{Name: "vllm-small"},
+			Spec:       v1alpha1.EndpointSpec{ForProvider: spec},
+			Status: v1alpha1.EndpointStatus{
+				AtProvider: v1alpha1.EndpointObservation{TemplateID: "tpl-xyz"},
+			},
+		}
+		meta.SetExternalName(ep, "ep-123")
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+		if _, err := e.Update(context.Background(), ep); err != nil {
+			t.Fatalf("Update() error = %v", err)
+		}
+
+		wantOrder := []string{"PATCH /endpoints", "GET /templates", "PATCH /templates", "PATCH /endpoints", "PATCH /endpoints"}
+		if !reflect.DeepEqual(order, wantOrder) {
+			t.Fatalf("Update() call order = %v, want %v", order, wantOrder)
+		}
+		if len(endpointPatchBodies) != 3 {
+			t.Fatalf("Update() endpoint PATCH count = %d, want 3", len(endpointPatchBodies))
+		}
+		if got := endpointPatchBodies[1].WorkersMax; got == nil || *got != 0 {
+			t.Fatalf("Update() recycle first PATCH workersMax = %#v, want 0", got)
+		}
+		if got := endpointPatchBodies[2].WorkersMax; got == nil || *got != 2 {
+			t.Fatalf("Update() recycle restore PATCH workersMax = %#v, want 2", got)
+		}
+		if gotEndpoint.WorkersMax == nil || *gotEndpoint.WorkersMax != 2 {
+			t.Fatalf("Update() endpoint workersMax = %#v, want 2", gotEndpoint.WorkersMax)
+		}
+		if gotEndpoint.IdleTimeout == nil || *gotEndpoint.IdleTimeout != 60 {
+			t.Fatalf("Update() endpoint idleTimeout = %#v, want 60", gotEndpoint.IdleTimeout)
+		}
+		if gotEndpoint.VCPUCount == nil || *gotEndpoint.VCPUCount != 4 {
+			t.Fatalf("Update() endpoint vcpuCount = %#v, want 4", gotEndpoint.VCPUCount)
+		}
+		if !reflect.DeepEqual(gotEndpoint.CPUFlavorIDs, []string{"cpu3c"}) {
+			t.Fatalf("Update() endpoint cpuFlavorIds = %#v", gotEndpoint.CPUFlavorIDs)
+		}
+		if !reflect.DeepEqual(gotEndpoint.AllowedCudaVersions, []string{"12.1"}) {
+			t.Fatalf("Update() endpoint allowedCudaVersions = %#v", gotEndpoint.AllowedCudaVersions)
+		}
+		if gotEndpoint.MinCudaVersion == nil || *gotEndpoint.MinCudaVersion != "11.8" {
+			t.Fatalf("Update() endpoint minCudaVersion = %#v", gotEndpoint.MinCudaVersion)
+		}
+		if !reflect.DeepEqual(gotEndpoint.NetworkVolumeIDs, []string{"nv-1", "nv-2"}) {
+			t.Fatalf("Update() endpoint networkVolumeIds = %#v", gotEndpoint.NetworkVolumeIDs)
+		}
+		if gotTemplate.ImageName == nil || *gotTemplate.ImageName != "runpod/worker-v1-vllm:stable" {
+			t.Fatalf("Update() template imageName = %#v", gotTemplate.ImageName)
+		}
+		if !reflect.DeepEqual(gotTemplate.DockerStartCmd, []string{"python", "run.py"}) {
+			t.Fatalf("Update() template dockerStartCmd = %#v", gotTemplate.DockerStartCmd)
+		}
+		if !reflect.DeepEqual(gotTemplate.DockerEntrypoint, []string{"/bin/sh"}) {
+			t.Fatalf("Update() template dockerEntrypoint = %#v", gotTemplate.DockerEntrypoint)
+		}
+		if gotTemplate.ContainerRegistryAuthID == nil || *gotTemplate.ContainerRegistryAuthID != "auth-1" {
+			t.Fatalf("Update() template containerRegistryAuthId = %#v", gotTemplate.ContainerRegistryAuthID)
+		}
+	})
+
+	t.Run("NilWorkersMaxSkipsRecycleWithoutGetFallback", func(t *testing.T) {
+		// Template drifted and recycle is enabled, but spec.workersMax is
+		// nil: recycling must be skipped outright, with no GET /endpoints
+		// fallback and no workersMax PATCHes of any kind (runpod-final-review
+		// item 1 — a GET-fallback could "restore" to whatever workersMax
+		// happens to be observed, including 0 if a prior recycle failed
+		// mid-cycle).
+		var calls []string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls = append(calls, r.Method+" "+r.URL.Path)
+			switch {
+			case r.Method == http.MethodPatch && r.URL.Path == "/endpoints/ep-123":
+				_ = json.NewEncoder(w).Encode(map[string]string{"id": "ep-123"})
+			case r.Method == http.MethodGet && r.URL.Path == "/templates/tpl-xyz":
+				drifted := templateResponse()
+				drifted.ImageName = "runpod/worker-v1-vllm:old"
+				_ = json.NewEncoder(w).Encode(drifted)
+			case r.Method == http.MethodPatch && r.URL.Path == "/templates/tpl-xyz":
+				_ = json.NewEncoder(w).Encode(map[string]string{"id": "tpl-xyz"})
+			default:
+				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			}
+		}))
+		defer server.Close()
+
+		spec := matchingSpec()
+		spec.WorkersMax = nil
+
+		ep := &v1alpha1.Endpoint{
+			ObjectMeta: metav1.ObjectMeta{Name: "vllm-small"},
+			Spec:       v1alpha1.EndpointSpec{ForProvider: spec},
+			Status: v1alpha1.EndpointStatus{
+				AtProvider: v1alpha1.EndpointObservation{TemplateID: "tpl-xyz"},
+			},
+		}
+		meta.SetExternalName(ep, "ep-123")
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+		if _, err := e.Update(context.Background(), ep); err != nil {
+			t.Fatalf("Update() error = %v", err)
+		}
+
+		want := []string{"PATCH /endpoints/ep-123", "GET /templates/tpl-xyz", "PATCH /templates/tpl-xyz"}
+		if !reflect.DeepEqual(calls, want) {
+			t.Fatalf("Update() calls = %v, want %v (no recycle PATCHes, no GET fallback)", calls, want)
+		}
+	})
+
+	t.Run("RecycleRestoreFailureReturnsError", func(t *testing.T) {
+		// The second (restore) workersMax PATCH fails transiently. Update
+		// must propagate an error wrapping errRecycleWorkers, and calls must
+		// end at the failed restore attempt: the endpoint is left at
+		// workersMax:0, but since spec.workersMax is set, the next
+		// reconcile's endpoint PATCH will carry it and self-heal.
+		var calls []string
+		var endpointPatchCount int
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls = append(calls, r.Method+" "+r.URL.Path)
+			switch {
+			case r.Method == http.MethodPatch && r.URL.Path == "/endpoints/ep-123":
+				endpointPatchCount++
+				if endpointPatchCount == 3 {
+					// The restore PATCH (1st = spec patch, 2nd = zero, 3rd = restore).
+					w.WriteHeader(http.StatusInternalServerError)
+					return
+				}
+				_ = json.NewEncoder(w).Encode(map[string]string{"id": "ep-123"})
+			case r.Method == http.MethodGet && r.URL.Path == "/templates/tpl-xyz":
+				drifted := templateResponse()
+				drifted.ImageName = "runpod/worker-v1-vllm:old"
+				_ = json.NewEncoder(w).Encode(drifted)
+			case r.Method == http.MethodPatch && r.URL.Path == "/templates/tpl-xyz":
+				_ = json.NewEncoder(w).Encode(map[string]string{"id": "tpl-xyz"})
+			default:
+				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			}
+		}))
+		defer server.Close()
+
+		spec := matchingSpec()
+
+		ep := &v1alpha1.Endpoint{
+			ObjectMeta: metav1.ObjectMeta{Name: "vllm-small"},
+			Spec:       v1alpha1.EndpointSpec{ForProvider: spec},
+			Status: v1alpha1.EndpointStatus{
+				AtProvider: v1alpha1.EndpointObservation{TemplateID: "tpl-xyz"},
+			},
+		}
+		meta.SetExternalName(ep, "ep-123")
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+		_, err := e.Update(context.Background(), ep)
+		if err == nil {
+			t.Fatal("Update() error = nil, want non-nil")
+		}
+		if !strings.Contains(err.Error(), errRecycleWorkers) {
+			t.Fatalf("Update() error = %q, want wrapped %q", err.Error(), errRecycleWorkers)
+		}
+
+		want := []string{
+			"PATCH /endpoints/ep-123",
+			"GET /templates/tpl-xyz",
+			"PATCH /templates/tpl-xyz",
+			"PATCH /endpoints/ep-123",
+			"PATCH /endpoints/ep-123",
+		}
+		if !reflect.DeepEqual(calls, want) {
+			t.Fatalf("Update() calls = %v, want %v (ending at the failed restore)", calls, want)
+		}
+	})
+
+	t.Run("RecycleDisabledSkipsWorkersMaxCycling", func(t *testing.T) {
+		// Scenario 6: template drifted, but recycleWorkersOnTemplateChange
+		// is explicitly false -> no workersMax cycling PATCHes.
+		var endpointPatchCount int
+		var templatePatched bool
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == http.MethodPatch && r.URL.Path == "/endpoints/ep-123":
+				endpointPatchCount++
+				_ = json.NewEncoder(w).Encode(map[string]string{"id": "ep-123"})
+			case r.Method == http.MethodGet && r.URL.Path == "/templates/tpl-xyz":
+				drifted := templateResponse()
+				drifted.ImageName = "runpod/worker-v1-vllm:old"
+				_ = json.NewEncoder(w).Encode(drifted)
+			case r.Method == http.MethodPatch && r.URL.Path == "/templates/tpl-xyz":
+				templatePatched = true
+				_ = json.NewEncoder(w).Encode(map[string]string{"id": "tpl-xyz"})
+			default:
+				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			}
+		}))
+		defer server.Close()
+
+		spec := matchingSpec()
+		spec.RecycleWorkersOnTemplateChange = ptrBool(false)
+
+		ep := &v1alpha1.Endpoint{
+			ObjectMeta: metav1.ObjectMeta{Name: "vllm-small"},
+			Spec:       v1alpha1.EndpointSpec{ForProvider: spec},
+			Status: v1alpha1.EndpointStatus{
+				AtProvider: v1alpha1.EndpointObservation{TemplateID: "tpl-xyz"},
+			},
+		}
+		meta.SetExternalName(ep, "ep-123")
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+		if _, err := e.Update(context.Background(), ep); err != nil {
+			t.Fatalf("Update() error = %v", err)
+		}
+		if !templatePatched {
+			t.Fatal("Update() did not patch template despite drift")
+		}
+		if endpointPatchCount != 1 {
+			t.Fatalf("Update() endpoint PATCH count = %d, want 1 (no recycle)", endpointPatchCount)
+		}
+	})
+
+	t.Run("TemplateGetFailureDuringDriftCheckReturnsError", func(t *testing.T) {
+		// A transient GET /templates failure during the drift check must
+		// propagate as an error (retry semantics), not be silently treated
+		// as "no drift" — consistent with Observe's handling of the same
+		// call. No template PATCH or recycle PATCHes must fire.
+		var calls []string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls = append(calls, r.Method+" "+r.URL.Path)
+			switch {
+			case r.Method == http.MethodPatch && r.URL.Path == "/endpoints/ep-123":
+				_ = json.NewEncoder(w).Encode(map[string]string{"id": "ep-123"})
+			case r.Method == http.MethodGet && r.URL.Path == "/templates/tpl-xyz":
+				w.WriteHeader(http.StatusInternalServerError)
+			default:
+				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			}
+		}))
+		defer server.Close()
+
+		ep := &v1alpha1.Endpoint{
+			ObjectMeta: metav1.ObjectMeta{Name: "vllm-small"},
+			Spec:       v1alpha1.EndpointSpec{ForProvider: matchingSpec()},
+			Status: v1alpha1.EndpointStatus{
+				AtProvider: v1alpha1.EndpointObservation{TemplateID: "tpl-xyz"},
+			},
+		}
+		meta.SetExternalName(ep, "ep-123")
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+		_, err := e.Update(context.Background(), ep)
+		if err == nil {
+			t.Fatal("Update() error = nil, want non-nil")
+		}
+		if !strings.Contains(err.Error(), errGetTemplate) {
+			t.Fatalf("Update() error = %q, want wrapped %q", err.Error(), errGetTemplate)
+		}
+
+		want := []string{"PATCH /endpoints/ep-123", "GET /templates/tpl-xyz"}
+		if !reflect.DeepEqual(calls, want) {
+			t.Fatalf("Update() calls = %v, want %v (no template PATCH or recycle PATCHes)", calls, want)
+		}
+	})
+
+	t.Run("NoTemplateDriftSkipsTemplatePatchAndRecycle", func(t *testing.T) {
+		// Scenario 7: GET /templates shows the template already matches the
+		// spec -> no template PATCH, no recycle PATCHes.
+		var endpointPatchCount int
+		var templatePatched bool
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == http.MethodPatch && r.URL.Path == "/endpoints/ep-123":
+				endpointPatchCount++
+				_ = json.NewEncoder(w).Encode(map[string]string{"id": "ep-123"})
+			case r.Method == http.MethodGet && r.URL.Path == "/templates/tpl-xyz":
+				_ = json.NewEncoder(w).Encode(templateResponse())
+			case r.Method == http.MethodPatch && r.URL.Path == "/templates/tpl-xyz":
+				templatePatched = true
+				_ = json.NewEncoder(w).Encode(map[string]string{"id": "tpl-xyz"})
+			default:
+				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 			}
 		}))
 		defer server.Close()
@@ -527,18 +979,11 @@ func TestUpdate(t *testing.T) {
 		if _, err := e.Update(context.Background(), ep); err != nil {
 			t.Fatalf("Update() error = %v", err)
 		}
-
-		if !reflect.DeepEqual(paths, []string{"/endpoints/ep-123", "/templates/tpl-xyz"}) {
-			t.Fatalf("Update() patched paths = %v", paths)
+		if templatePatched {
+			t.Fatal("Update() patched template despite no drift")
 		}
-		if gotEndpoint.WorkersMax == nil || *gotEndpoint.WorkersMax != 2 {
-			t.Fatalf("Update() endpoint workersMax = %#v, want 2", gotEndpoint.WorkersMax)
-		}
-		if gotEndpoint.IdleTimeout == nil || *gotEndpoint.IdleTimeout != 60 {
-			t.Fatalf("Update() endpoint idleTimeout = %#v, want 60", gotEndpoint.IdleTimeout)
-		}
-		if gotTemplate.ImageName == nil || *gotTemplate.ImageName != "runpod/worker-v1-vllm:stable" {
-			t.Fatalf("Update() template imageName = %#v", gotTemplate.ImageName)
+		if endpointPatchCount != 1 {
+			t.Fatalf("Update() endpoint PATCH count = %d, want 1 (no recycle)", endpointPatchCount)
 		}
 	})
 
@@ -550,6 +995,10 @@ func TestUpdate(t *testing.T) {
 				_ = json.NewEncoder(w).Encode(map[string]string{"id": "ep-123"})
 			case r.Method == http.MethodGet && r.URL.Path == "/endpoints/ep-123":
 				_ = json.NewEncoder(w).Encode(readyResponse())
+			case r.Method == http.MethodGet && r.URL.Path == "/templates/tpl-xyz":
+				drifted := templateResponse()
+				drifted.ImageName = "runpod/worker-v1-vllm:old"
+				_ = json.NewEncoder(w).Encode(drifted)
 			case r.Method == http.MethodPatch && r.URL.Path == "/templates/tpl-xyz":
 				templatePatched = true
 				_ = json.NewEncoder(w).Encode(map[string]string{"id": "tpl-xyz"})
@@ -571,6 +1020,51 @@ func TestUpdate(t *testing.T) {
 		}
 		if !templatePatched {
 			t.Fatal("Update() did not patch template after GET fallback")
+		}
+	})
+
+	t.Run("TemplateModeUpdate", func(t *testing.T) {
+		// Scenario 3: templateId mode -> PATCH /endpoints carries templateId,
+		// no template PATCH/GET, no recycle.
+		var gotEndpoint runpodclient.UpdateEndpointRequest
+		var calls []string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls = append(calls, r.Method+" "+r.URL.Path)
+			if r.Method == http.MethodPatch && r.URL.Path == "/endpoints/ep-123" {
+				if err := json.NewDecoder(r.Body).Decode(&gotEndpoint); err != nil {
+					t.Fatalf("decode endpoint patch: %v", err)
+				}
+				_ = json.NewEncoder(w).Encode(map[string]string{"id": "ep-123"})
+				return
+			}
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}))
+		defer server.Close()
+
+		spec := v1alpha1.EndpointParameters{
+			TemplateID: ptrString("tpl-ext"),
+			WorkersMax: ptrInt32(2),
+		}
+		ep := &v1alpha1.Endpoint{
+			ObjectMeta: metav1.ObjectMeta{Name: "vllm-from-template"},
+			Spec:       v1alpha1.EndpointSpec{ForProvider: spec},
+			Status: v1alpha1.EndpointStatus{
+				AtProvider: v1alpha1.EndpointObservation{TemplateID: "tpl-ext"},
+			},
+		}
+		meta.SetExternalName(ep, "ep-123")
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+		if _, err := e.Update(context.Background(), ep); err != nil {
+			t.Fatalf("Update() error = %v", err)
+		}
+
+		want := []string{"PATCH /endpoints/ep-123"}
+		if !reflect.DeepEqual(calls, want) {
+			t.Fatalf("Update() calls = %v, want %v", calls, want)
+		}
+		if gotEndpoint.TemplateID == nil || *gotEndpoint.TemplateID != "tpl-ext" {
+			t.Fatalf("Update() endpoint templateId = %#v, want %q", gotEndpoint.TemplateID, "tpl-ext")
 		}
 	})
 
@@ -773,6 +1267,36 @@ func TestDelete(t *testing.T) {
 			t.Fatalf("Delete() HTTP calls = %d, want 0", calls)
 		}
 	})
+
+	t.Run("TemplateModeNeverDeletesReferencedTemplate", func(t *testing.T) {
+		// Scenario 4: DELETE /endpoints only — the referenced template MUST
+		// NOT be deleted, even though it is recorded in atProvider.
+		var paths []string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			paths = append(paths, r.Method+" "+r.URL.Path)
+			w.WriteHeader(http.StatusNoContent)
+		}))
+		defer server.Close()
+
+		ep := &v1alpha1.Endpoint{
+			Spec: v1alpha1.EndpointSpec{
+				ForProvider: v1alpha1.EndpointParameters{TemplateID: ptrString("tpl-ext")},
+			},
+			Status: v1alpha1.EndpointStatus{
+				AtProvider: v1alpha1.EndpointObservation{TemplateID: "tpl-ext"},
+			},
+		}
+		meta.SetExternalName(ep, "ep-123")
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+		if _, err := e.Delete(context.Background(), ep); err != nil {
+			t.Fatalf("Delete() error = %v", err)
+		}
+		want := []string{"DELETE /endpoints/ep-123"}
+		if !reflect.DeepEqual(paths, want) {
+			t.Fatalf("Delete() calls = %v, want %v", paths, want)
+		}
+	})
 }
 
 func TestHasEndpointDrift(t *testing.T) {
@@ -817,6 +1341,31 @@ func TestHasEndpointDrift(t *testing.T) {
 			mutate: func(s *v1alpha1.EndpointParameters) { s.GPUTypeIDs = []string{} },
 			want:   false,
 		},
+		"ComputeTypeDoesNotDrift": {
+			// Write-only: the observation never echoes computeType.
+			mutate: func(s *v1alpha1.EndpointParameters) { s.ComputeType = ptrString("CPU") },
+			want:   false,
+		},
+		"VCPUCountDoesNotDrift": {
+			mutate: func(s *v1alpha1.EndpointParameters) { s.VCPUCount = ptrInt32(4) },
+			want:   false,
+		},
+		"CPUFlavorIDsDoNotDrift": {
+			mutate: func(s *v1alpha1.EndpointParameters) { s.CPUFlavorIDs = []string{"cpu3c"} },
+			want:   false,
+		},
+		"AllowedCudaVersionsDoNotDrift": {
+			mutate: func(s *v1alpha1.EndpointParameters) { s.AllowedCudaVersions = []string{"12.1"} },
+			want:   false,
+		},
+		"MinCudaVersionDoesNotDrift": {
+			mutate: func(s *v1alpha1.EndpointParameters) { s.MinCudaVersion = ptrString("11.8") },
+			want:   false,
+		},
+		"NetworkVolumeIDsDoNotDrift": {
+			mutate: func(s *v1alpha1.EndpointParameters) { s.NetworkVolumeIDs = []string{"nv-1"} },
+			want:   false,
+		},
 	}
 
 	for name, tc := range tests {
@@ -840,7 +1389,7 @@ func TestHasTemplateDrift(t *testing.T) {
 			want:   false,
 		},
 		"ImageDrifts": {
-			mutate: func(s *v1alpha1.EndpointParameters) { s.ImageName = "other:latest" },
+			mutate: func(s *v1alpha1.EndpointParameters) { s.ImageName = ptrString("other:latest") },
 			want:   true,
 		},
 		"EnvDrifts": {
@@ -863,6 +1412,27 @@ func TestHasTemplateDrift(t *testing.T) {
 		"EmptyEnvDoesNotDrift": {
 			mutate: func(s *v1alpha1.EndpointParameters) { s.Env = []v1alpha1.EnvVar{} },
 			want:   false,
+		},
+		"DockerStartCmdDrifts": {
+			// Order-sensitive: same elements, different order still drifts.
+			mutate: func(s *v1alpha1.EndpointParameters) { s.DockerStartCmd = []string{"run.py", "python"} },
+			want:   true,
+		},
+		"DockerEntrypointDrifts": {
+			mutate: func(s *v1alpha1.EndpointParameters) { s.DockerEntrypoint = []string{"other"} },
+			want:   true,
+		},
+		"ContainerRegistryAuthIDDrifts": {
+			mutate: func(s *v1alpha1.EndpointParameters) { s.ContainerRegistryAuthID = ptrString("other-auth") },
+			want:   true,
+		},
+		"NilDockerAndAuthFieldsDoNotDrift": {
+			mutate: func(s *v1alpha1.EndpointParameters) {
+				s.DockerStartCmd = nil
+				s.DockerEntrypoint = nil
+				s.ContainerRegistryAuthID = nil
+			},
+			want: false,
 		},
 	}
 
@@ -889,3 +1459,5 @@ func newTestClient(t *testing.T, server *httptest.Server) *runpodclient.Client {
 func ptrInt32(v int32) *int32 { return &v }
 
 func ptrBool(b bool) *bool { return &b }
+
+func ptrString(s string) *string { return &s }
