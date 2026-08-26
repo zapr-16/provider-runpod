@@ -3,7 +3,6 @@ package endpoint
 import (
 	"context"
 
-	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
 	managed "github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
 	xpresource "github.com/crossplane/crossplane-runtime/v2/pkg/resource"
 	"github.com/go-logr/logr"
@@ -14,6 +13,7 @@ import (
 	v1alpha1 "github.com/zapr-16/provider-runpod/apis/v1alpha1"
 	v1beta1 "github.com/zapr-16/provider-runpod/apis/v1beta1"
 	runpodclient "github.com/zapr-16/provider-runpod/internal/clients"
+	"github.com/zapr-16/provider-runpod/internal/controller/register"
 )
 
 const (
@@ -60,19 +60,10 @@ func (c *connector) Connect(ctx context.Context, mg xpresource.Managed) (managed
 
 // Setup registers the Endpoint managed-resource controller with the manager.
 func Setup(mgr ctrl.Manager, log logr.Logger) error {
-	name := xpresource.ManagedKind(v1alpha1.SchemeGroupVersion.WithKind("Endpoint"))
-	r := managed.NewReconciler(
-		mgr,
-		name,
-		managed.WithExternalConnector(&connector{
-			kube:  mgr.GetClient(),
-			usage: xpresource.NewProviderConfigUsageTracker(mgr.GetClient(), &v1beta1.ProviderConfigUsage{}),
-			log:   log,
-		}),
-		managed.WithLogger(logging.NewLogrLogger(log)),
-	)
-
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&v1alpha1.Endpoint{}).
-		Complete(r)
+	conn := &connector{
+		kube:  mgr.GetClient(),
+		usage: xpresource.NewProviderConfigUsageTracker(mgr.GetClient(), &v1beta1.ProviderConfigUsage{}),
+		log:   log,
+	}
+	return register.ManagedController(mgr, "Endpoint", &v1alpha1.Endpoint{}, conn, log)
 }

@@ -320,3 +320,34 @@ func (c *Client) deleteStrict(ctx context.Context, path string) error {
 
 	return nil
 }
+
+// getStrict GETs path and decodes the response into out. Only a 404 means
+// "not found"; any other non-2xx is an error, so a transient failure never
+// reads as absence (which would trigger a duplicate Create).
+func (c *Client) getStrict(ctx context.Context, path string, out any) (bool, error) {
+	req, err := c.NewRequest(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return false, errors.Wrap(err, errCreateRequest)
+	}
+
+	resp, err := c.Do(req)
+	if err != nil {
+		return false, errors.Wrap(err, errDoRequest)
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return false, nil
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return false, errors.Errorf("RunPod GET %s returned status %d: %s", path, resp.StatusCode, readErrorBody(resp.Body))
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return false, errors.Wrap(err, errDecodeResponse)
+	}
+
+	return true, nil
+}

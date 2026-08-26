@@ -2,10 +2,7 @@ package clients
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
-
-	"github.com/pkg/errors"
 )
 
 const (
@@ -50,26 +47,10 @@ func (c *Client) GetNetworkVolume(ctx context.Context, id string) (*NetworkVolum
 	if err := validateResourceID(id); err != nil {
 		return nil, false, err
 	}
-	req, err := c.NewRequest(ctx, http.MethodGet, networkVolumesPathPrefix+id, nil)
-	if err != nil {
-		return nil, false, errors.Wrap(err, errCreateRequest)
-	}
-	resp, err := c.Do(req)
-	if err != nil {
-		return nil, false, errors.Wrap(err, errDoRequest)
-	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
-	if resp.StatusCode == http.StatusNotFound {
-		return nil, false, nil
-	}
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, false, errors.Errorf("RunPod GET /networkvolumes/%s returned status %d: %s", id, resp.StatusCode, readErrorBody(resp.Body))
-	}
 	var out NetworkVolumeResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, false, errors.Wrap(err, errDecodeResponse)
+	found, err := c.getStrict(ctx, networkVolumesPathPrefix+id, &out)
+	if err != nil || !found {
+		return nil, false, err
 	}
 	return &out, true, nil
 }
