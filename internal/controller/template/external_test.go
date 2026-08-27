@@ -286,21 +286,21 @@ func TestObserve(t *testing.T) {
 				return
 			}
 			if got.ResourceUpToDate != tc.want.upToDate {
-				t.Fatalf("Observe() ResourceUpToDate = %v, want %v", got.ResourceUpToDate, tc.want.upToDate)
+				t.Errorf("Observe() ResourceUpToDate = %v, want %v", got.ResourceUpToDate, tc.want.upToDate)
 			}
 			ready := tmpl.GetCondition(xpv2.TypeReady)
 			if tc.want.upToDate && ready.Status != "True" {
-				t.Fatalf("Observe() Ready status = %v, want True", ready.Status)
+				t.Errorf("Observe() Ready status = %v, want True", ready.Status)
 			}
 			at := tmpl.Status.AtProvider
 			if at.TemplateID != tc.want.id {
-				t.Fatalf("Observe() TemplateID = %q, want %q", at.TemplateID, tc.want.id)
+				t.Errorf("Observe() TemplateID = %q, want %q", at.TemplateID, tc.want.id)
 			}
 			if at.Name != tc.want.name {
-				t.Fatalf("Observe() Name = %q, want %q", at.Name, tc.want.name)
+				t.Errorf("Observe() Name = %q, want %q", at.Name, tc.want.name)
 			}
 			if !reflect.DeepEqual(got.ConnectionDetails, tc.want.connection) {
-				t.Fatalf("Observe() ConnectionDetails = %#v, want %#v", got.ConnectionDetails, tc.want.connection)
+				t.Errorf("Observe() ConnectionDetails = %#v, want %#v", got.ConnectionDetails, tc.want.connection)
 			}
 		})
 	}
@@ -338,7 +338,7 @@ func TestCreate(t *testing.T) {
 			t.Fatalf("Create() error = %v", err)
 		}
 		if gotPath != "/templates" {
-			t.Fatalf("Create() path = %q, want /templates", gotPath)
+			t.Fatalf("Create() path = %q, want %q", gotPath, "/templates")
 		}
 		if gotBody.Name != "vllm-base" {
 			t.Fatalf("Create() name = %q, want %q (defaulted from metadata.name)", gotBody.Name, "vllm-base")

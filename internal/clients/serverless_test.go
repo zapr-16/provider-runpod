@@ -74,22 +74,22 @@ func TestCreateTemplateFullPayload(t *testing.T) {
 	}
 
 	if got, _ := gotBody["dockerStartCmd"].([]any); len(got) != 2 || got[0] != "python3" || got[1] != "handler.py" {
-		t.Fatalf("dockerStartCmd not sent: %v", gotBody["dockerStartCmd"])
+		t.Errorf("dockerStartCmd not sent: %v", gotBody["dockerStartCmd"])
 	}
 	if got, _ := gotBody["dockerEntrypoint"].([]any); len(got) != 2 || got[0] != "/bin/sh" || got[1] != "-c" {
-		t.Fatalf("dockerEntrypoint not sent: %v", gotBody["dockerEntrypoint"])
+		t.Errorf("dockerEntrypoint not sent: %v", gotBody["dockerEntrypoint"])
 	}
 	if gotBody["containerRegistryAuthId"] != "auth-1" {
-		t.Fatalf("containerRegistryAuthId not sent: %v", gotBody["containerRegistryAuthId"])
+		t.Errorf("containerRegistryAuthId not sent: %v", gotBody["containerRegistryAuthId"])
 	}
 	if got, _ := gotBody["ports"].([]any); len(got) != 1 || got[0] != "8080/http" {
-		t.Fatalf("ports not sent: %v", gotBody["ports"])
+		t.Errorf("ports not sent: %v", gotBody["ports"])
 	}
 	if gotBody["volumeInGb"] != float64(20) {
-		t.Fatalf("volumeInGb not sent: %v", gotBody["volumeInGb"])
+		t.Errorf("volumeInGb not sent: %v", gotBody["volumeInGb"])
 	}
 	if gotBody["volumeMountPath"] != "/workspace" {
-		t.Fatalf("volumeMountPath not sent: %v", gotBody["volumeMountPath"])
+		t.Errorf("volumeMountPath not sent: %v", gotBody["volumeMountPath"])
 	}
 }
 
@@ -121,25 +121,25 @@ func TestUpdateTemplateFullPayload(t *testing.T) {
 	}
 
 	if gotBody["name"] != "renamed" {
-		t.Fatalf("name not sent: %v", gotBody["name"])
+		t.Errorf("name not sent: %v", gotBody["name"])
 	}
 	if got, _ := gotBody["dockerStartCmd"].([]any); len(got) != 2 || got[0] != "python3" {
-		t.Fatalf("dockerStartCmd not sent: %v", gotBody["dockerStartCmd"])
+		t.Errorf("dockerStartCmd not sent: %v", gotBody["dockerStartCmd"])
 	}
 	if got, _ := gotBody["dockerEntrypoint"].([]any); len(got) != 2 || got[0] != "/bin/sh" {
-		t.Fatalf("dockerEntrypoint not sent: %v", gotBody["dockerEntrypoint"])
+		t.Errorf("dockerEntrypoint not sent: %v", gotBody["dockerEntrypoint"])
 	}
 	if gotBody["containerRegistryAuthId"] != "auth-1" {
-		t.Fatalf("containerRegistryAuthId not sent: %v", gotBody["containerRegistryAuthId"])
+		t.Errorf("containerRegistryAuthId not sent: %v", gotBody["containerRegistryAuthId"])
 	}
 	if got, _ := gotBody["ports"].([]any); len(got) != 1 || got[0] != "8080/http" {
-		t.Fatalf("ports not sent: %v", gotBody["ports"])
+		t.Errorf("ports not sent: %v", gotBody["ports"])
 	}
 	if gotBody["volumeInGb"] != float64(20) {
-		t.Fatalf("volumeInGb not sent: %v", gotBody["volumeInGb"])
+		t.Errorf("volumeInGb not sent: %v", gotBody["volumeInGb"])
 	}
 	if gotBody["volumeMountPath"] != "/workspace" {
-		t.Fatalf("volumeMountPath not sent: %v", gotBody["volumeMountPath"])
+		t.Errorf("volumeMountPath not sent: %v", gotBody["volumeMountPath"])
 	}
 }
 
@@ -174,22 +174,22 @@ func TestGetTemplateFullResponse(t *testing.T) {
 		t.Fatal("GetTemplate found = false, want true")
 	}
 	if len(out.DockerStartCmd) != 2 || out.DockerStartCmd[0] != "python3" {
-		t.Fatalf("DockerStartCmd = %#v", out.DockerStartCmd)
+		t.Errorf("DockerStartCmd = %#v", out.DockerStartCmd)
 	}
 	if len(out.DockerEntrypoint) != 2 || out.DockerEntrypoint[0] != "/bin/sh" {
-		t.Fatalf("DockerEntrypoint = %#v", out.DockerEntrypoint)
+		t.Errorf("DockerEntrypoint = %#v", out.DockerEntrypoint)
 	}
 	if out.ContainerRegistryAuthID != "auth-1" {
-		t.Fatalf("ContainerRegistryAuthID = %q, want %q", out.ContainerRegistryAuthID, "auth-1")
+		t.Errorf("ContainerRegistryAuthID = %q, want %q", out.ContainerRegistryAuthID, "auth-1")
 	}
 	if len(out.Ports) != 1 || out.Ports[0] != "8080/http" {
-		t.Fatalf("Ports = %#v", out.Ports)
+		t.Errorf("Ports = %#v", out.Ports)
 	}
 	if out.VolumeInGb != 20 {
-		t.Fatalf("VolumeInGb = %d, want 20", out.VolumeInGb)
+		t.Errorf("VolumeInGb = %d, want 20", out.VolumeInGb)
 	}
 	if out.VolumeMountPath != "/workspace" {
-		t.Fatalf("VolumeMountPath = %q, want %q", out.VolumeMountPath, "/workspace")
+		t.Errorf("VolumeMountPath = %q, want %q", out.VolumeMountPath, "/workspace")
 	}
 }
 

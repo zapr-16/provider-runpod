@@ -35,10 +35,17 @@ type NetworkVolumeParameters struct {
 
 // NetworkVolumeObservation captures the observed state returned by RunPod.
 type NetworkVolumeObservation struct {
+	// RunPod network volume ID, mirrored from the external name.
 	NetworkVolumeID string `json:"networkVolumeId,omitempty"`
-	Name            string `json:"name,omitempty"`
-	Size            int32  `json:"size,omitempty"`
-	DataCenterID    string `json:"dataCenterId,omitempty"`
+
+	// Volume name as reported by RunPod.
+	Name string `json:"name,omitempty"`
+
+	// Volume size in GB as reported by RunPod.
+	Size int32 `json:"size,omitempty"`
+
+	// Data center hosting the volume, as reported by RunPod.
+	DataCenterID string `json:"dataCenterId,omitempty"`
 }
 
 // NetworkVolumeSpec defines the desired state of a RunPod NetworkVolume resource.
@@ -57,6 +64,10 @@ type NetworkVolumeStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Namespaced,categories=crossplane
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
+// +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
+// +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 type NetworkVolume struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

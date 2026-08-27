@@ -178,31 +178,11 @@ func (c *Client) GetTemplate(ctx context.Context, templateID string) (*TemplateR
 		return nil, false, err
 	}
 
-	req, err := c.NewRequest(ctx, http.MethodGet, templatesPathPrefix+templateID, nil)
-	if err != nil {
-		return nil, false, errors.Wrap(err, errCreateRequest)
-	}
-
-	resp, err := c.Do(req)
-	if err != nil {
-		return nil, false, errors.Wrap(err, errDoRequest)
-	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
-
-	if resp.StatusCode == http.StatusNotFound {
-		return nil, false, nil
-	}
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, false, errors.Errorf("RunPod GET /templates/%s returned status %d: %s", templateID, resp.StatusCode, readErrorBody(resp.Body))
-	}
-
 	var out TemplateResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, false, errors.Wrap(err, errDecodeResponse)
+	found, err := c.getStrict(ctx, templatesPathPrefix+templateID, &out)
+	if err != nil || !found {
+		return nil, found, err
 	}
-
 	return &out, true, nil
 }
 
@@ -214,31 +194,11 @@ func (c *Client) GetEndpoint(ctx context.Context, endpointID string) (*EndpointR
 		return nil, false, err
 	}
 
-	req, err := c.NewRequest(ctx, http.MethodGet, endpointsPathPrefix+endpointID+"?includeWorkers=true", nil)
-	if err != nil {
-		return nil, false, errors.Wrap(err, errCreateRequest)
-	}
-
-	resp, err := c.Do(req)
-	if err != nil {
-		return nil, false, errors.Wrap(err, errDoRequest)
-	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
-
-	if resp.StatusCode == http.StatusNotFound {
-		return nil, false, nil
-	}
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, false, errors.Errorf("RunPod GET /endpoints/%s returned status %d: %s", endpointID, resp.StatusCode, readErrorBody(resp.Body))
-	}
-
 	var out EndpointResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, false, errors.Wrap(err, errDecodeResponse)
+	found, err := c.getStrict(ctx, endpointsPathPrefix+endpointID+"?includeWorkers=true", &out)
+	if err != nil || !found {
+		return nil, found, err
 	}
-
 	return &out, true, nil
 }
 

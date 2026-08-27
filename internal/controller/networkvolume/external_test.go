@@ -198,27 +198,27 @@ func TestObserve(t *testing.T) {
 				return
 			}
 			if got.ResourceUpToDate != tc.want.upToDate {
-				t.Fatalf("Observe() ResourceUpToDate = %v, want %v", got.ResourceUpToDate, tc.want.upToDate)
+				t.Errorf("Observe() ResourceUpToDate = %v, want %v", got.ResourceUpToDate, tc.want.upToDate)
 			}
 			ready := nv.GetCondition(xpv2.TypeReady)
 			if ready.Status != tc.want.readyStatus {
-				t.Fatalf("Observe() Ready status = %v, want %v", ready.Status, tc.want.readyStatus)
+				t.Errorf("Observe() Ready status = %v, want %v", ready.Status, tc.want.readyStatus)
 			}
 			at := nv.Status.AtProvider
 			if at.NetworkVolumeID != tc.want.id {
-				t.Fatalf("Observe() NetworkVolumeID = %q, want %q", at.NetworkVolumeID, tc.want.id)
+				t.Errorf("Observe() NetworkVolumeID = %q, want %q", at.NetworkVolumeID, tc.want.id)
 			}
 			if at.Name != tc.want.name {
-				t.Fatalf("Observe() Name = %q, want %q", at.Name, tc.want.name)
+				t.Errorf("Observe() Name = %q, want %q", at.Name, tc.want.name)
 			}
 			if at.Size != tc.want.size {
-				t.Fatalf("Observe() Size = %d, want %d", at.Size, tc.want.size)
+				t.Errorf("Observe() Size = %d, want %d", at.Size, tc.want.size)
 			}
 			if at.DataCenterID != tc.want.dataCenter {
-				t.Fatalf("Observe() DataCenterID = %q, want %q", at.DataCenterID, tc.want.dataCenter)
+				t.Errorf("Observe() DataCenterID = %q, want %q", at.DataCenterID, tc.want.dataCenter)
 			}
 			if !reflect.DeepEqual(got.ConnectionDetails, tc.want.connection) {
-				t.Fatalf("Observe() ConnectionDetails = %#v, want %#v", got.ConnectionDetails, tc.want.connection)
+				t.Errorf("Observe() ConnectionDetails = %#v, want %#v", got.ConnectionDetails, tc.want.connection)
 			}
 		})
 	}
@@ -254,7 +254,7 @@ func TestCreate(t *testing.T) {
 			t.Fatalf("Create() error = %v", err)
 		}
 		if gotPath != "/networkvolumes" {
-			t.Fatalf("Create() path = %q, want /networkvolumes", gotPath)
+			t.Fatalf("Create() path = %q, want %q", gotPath, "/networkvolumes")
 		}
 		if gotBody.Name != "model-cache" || gotBody.Size != 200 || gotBody.DataCenterID != "EU-RO-1" {
 			t.Fatalf("Create() request = %#v", gotBody)

@@ -28,13 +28,17 @@ const (
 
 // EnvVar defines an environment variable passed to the pod container.
 type EnvVar struct {
-	Name  string `json:"name"`
+	// Name of the environment variable.
+	Name string `json:"name"`
+	// Value assigned to the environment variable.
 	Value string `json:"value"`
 }
 
 // Port defines a container port exposed by the pod.
 type Port struct {
-	Number   int32  `json:"number"`
+	// Number is the container port to expose.
+	Number int32 `json:"number"`
+	// Protocol for the exposed port: tcp or http. Defaults to tcp.
 	Protocol string `json:"protocol,omitempty"`
 }
 
@@ -276,6 +280,10 @@ type PodStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Namespaced,categories=crossplane
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
+// +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
+// +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 type Pod struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

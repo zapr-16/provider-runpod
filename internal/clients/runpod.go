@@ -1,9 +1,7 @@
 package clients
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"io"
 	"net/http"
 	"regexp"
@@ -38,6 +36,7 @@ const (
 // otherwise redirect an authenticated request to a different API object.
 var resourceIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
+// validateResourceID rejects any ID not matching resourceIDPattern.
 func validateResourceID(id string) error {
 	if !resourceIDPattern.MatchString(id) {
 		return errors.Errorf("%s: %q", errInvalidResourceID, id)
@@ -245,63 +244,20 @@ func (c *Client) GetPod(ctx context.Context, podID string) (*PodResponse, bool, 
 		return nil, false, err
 	}
 
-	req, err := c.NewRequest(ctx, http.MethodGet, podsPathPrefix+podID+"?includeMachine=true", nil)
-	if err != nil {
-		return nil, false, errors.Wrap(err, errCreateRequest)
-	}
-
-	resp, err := c.Do(req)
-	if err != nil {
-		return nil, false, errors.Wrap(err, errDoRequest)
-	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
-
-	if resp.StatusCode == http.StatusNotFound {
-		return nil, false, nil
-	}
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, false, errors.Errorf("RunPod GET %s returned status %d: %s", podsPathPrefix+podID, resp.StatusCode, readErrorBody(resp.Body))
-	}
-
 	var out PodResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, false, errors.Wrap(err, errDecodeResponse)
+	found, err := c.getStrict(ctx, podsPathPrefix+podID+"?includeMachine=true", &out)
+	if err != nil || !found {
+		return nil, found, err
 	}
-
 	return &out, true, nil
 }
 
 // CreatePod creates a new RunPod pod and returns its pod ID.
 func (c *Client) CreatePod(ctx context.Context, payload CreatePodRequest) (string, error) {
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return "", errors.Wrap(err, errCreateRequest)
-	}
-
-	req, err := c.NewRequest(ctx, http.MethodPost, podsPath, bytes.NewReader(body))
-	if err != nil {
-		return "", errors.Wrap(err, errCreateRequest)
-	}
-
-	resp, err := c.Do(req)
-	if err != nil {
-		return "", errors.Wrap(err, errDoRequest)
-	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
-
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return "", errors.Errorf("RunPod POST %s returned status %d: %s", podsPath, resp.StatusCode, readErrorBody(resp.Body))
-	}
-
 	var out PodResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", errors.Wrap(err, errDecodeResponse)
+	if err := c.doJSON(ctx, http.MethodPost, podsPath, payload, &out); err != nil {
+		return "", err
 	}
-
 	return out.ID, nil
 }
 
@@ -312,28 +268,7 @@ func (c *Client) DeletePod(ctx context.Context, podID string) error {
 	if err := validateResourceID(podID); err != nil {
 		return err
 	}
-
-	req, err := c.NewRequest(ctx, http.MethodDelete, podsPathPrefix+podID, nil)
-	if err != nil {
-		return errors.Wrap(err, errCreateRequest)
-	}
-
-	resp, err := c.Do(req)
-	if err != nil {
-		return errors.Wrap(err, errDoRequest)
-	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
-
-	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
-		return nil
-	}
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return errors.Errorf("RunPod DELETE %s returned status %d: %s", podsPathPrefix+podID, resp.StatusCode, readErrorBody(resp.Body))
-	}
-
-	return nil
+	return c.deleteStrict(ctx, podsPathPrefix+podID)
 }
 
 // UpdatePod patches mutable fields of a RunPod pod. RunPod applies
@@ -356,6 +291,7 @@ func (c *Client) StopPod(ctx context.Context, podID string) error {
 	return c.podAction(ctx, podID, "stop")
 }
 
+// podAction POSTs /pods/{podId}/{action} ("start" or "stop") with no body.
 func (c *Client) podAction(ctx context.Context, podID, action string) error {
 	if err := validateResourceID(podID); err != nil {
 		return err
@@ -377,6 +313,9 @@ func (c *Client) podAction(ctx context.Context, podID, action string) error {
 	return nil
 }
 
+// readErrorBody reads an error response body, capped at 16KiB: the body is
+// untrusted (comes from the remote API), so the read is bounded regardless
+// of how large a response the server sends.
 func readErrorBody(body io.Reader) string {
 	if body == nil {
 		return "<empty>"

@@ -16,7 +16,20 @@ spec:
     singular: containerregistryauth
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .status.conditions[?(@.type=='Ready')].status
+      name: READY
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='Synced')].status
+      name: SYNCED
+      type: string
+    - jsonPath: .metadata.annotations.crossplane\.io/external-name
+      name: EXTERNAL-NAME
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: AGE
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: |-
@@ -146,8 +159,11 @@ spec:
                   state.
                 properties:
                   containerRegistryAuthId:
+                    description: RunPod container registry auth ID, mirrored from
+                      the external name.
                     type: string
                   name:
+                    description: Display name as reported by RunPod.
                     type: string
                 type: object
               conditions:

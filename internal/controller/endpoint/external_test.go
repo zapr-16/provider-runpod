@@ -318,7 +318,7 @@ func TestObserve(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls++
 				if r.Method != http.MethodGet {
-					t.Fatalf("unexpected method: %s", r.Method)
+					t.Fatalf("unexpected method: %q", r.Method)
 				}
 				switch r.URL.Path {
 				case "/endpoints/" + tc.externalName:
@@ -342,7 +342,7 @@ func TestObserve(t *testing.T) {
 						t.Fatalf("encode template response: %v", err)
 					}
 				default:
-					t.Fatalf("unexpected path: %s", r.URL.Path)
+					t.Fatalf("unexpected path: %q", r.URL.Path)
 				}
 			}))
 			defer server.Close()
@@ -380,33 +380,33 @@ func TestObserve(t *testing.T) {
 				return
 			}
 			if got.ResourceUpToDate != tc.want.upToDate {
-				t.Fatalf("Observe() ResourceUpToDate = %v, want %v", got.ResourceUpToDate, tc.want.upToDate)
+				t.Errorf("Observe() ResourceUpToDate = %v, want %v", got.ResourceUpToDate, tc.want.upToDate)
 			}
 			ready := ep.GetCondition(xpv2.TypeReady)
 			if ready.Status != tc.want.readyStatus {
-				t.Fatalf("Observe() Ready status = %v, want %v", ready.Status, tc.want.readyStatus)
+				t.Errorf("Observe() Ready status = %v, want %v", ready.Status, tc.want.readyStatus)
 			}
 			at := ep.Status.AtProvider
 			if at.EndpointID != tc.want.endpointID {
-				t.Fatalf("Observe() EndpointID = %q, want %q", at.EndpointID, tc.want.endpointID)
+				t.Errorf("Observe() EndpointID = %q, want %q", at.EndpointID, tc.want.endpointID)
 			}
 			if at.TemplateID != tc.want.templateID {
-				t.Fatalf("Observe() TemplateID = %q, want %q", at.TemplateID, tc.want.templateID)
+				t.Errorf("Observe() TemplateID = %q, want %q", at.TemplateID, tc.want.templateID)
 			}
 			if at.RuntimeEndpoint != tc.want.runtime {
-				t.Fatalf("Observe() RuntimeEndpoint = %q, want %q", at.RuntimeEndpoint, tc.want.runtime)
+				t.Errorf("Observe() RuntimeEndpoint = %q, want %q", at.RuntimeEndpoint, tc.want.runtime)
 			}
 			if at.OpenAIBaseURL != tc.want.openAI {
-				t.Fatalf("Observe() OpenAIBaseURL = %q, want %q", at.OpenAIBaseURL, tc.want.openAI)
+				t.Errorf("Observe() OpenAIBaseURL = %q, want %q", at.OpenAIBaseURL, tc.want.openAI)
 			}
 			if at.WorkersReady != tc.want.workersReady {
-				t.Fatalf("Observe() WorkersReady = %d, want %d", at.WorkersReady, tc.want.workersReady)
+				t.Errorf("Observe() WorkersReady = %d, want %d", at.WorkersReady, tc.want.workersReady)
 			}
 			if at.WorkersTotal != tc.want.workersTotal {
-				t.Fatalf("Observe() WorkersTotal = %d, want %d", at.WorkersTotal, tc.want.workersTotal)
+				t.Errorf("Observe() WorkersTotal = %d, want %d", at.WorkersTotal, tc.want.workersTotal)
 			}
 			if !reflect.DeepEqual(got.ConnectionDetails, tc.want.connection) {
-				t.Fatalf("Observe() ConnectionDetails = %#v, want %#v", got.ConnectionDetails, tc.want.connection)
+				t.Errorf("Observe() ConnectionDetails = %#v, want %#v", got.ConnectionDetails, tc.want.connection)
 			}
 		})
 	}
@@ -435,7 +435,7 @@ func TestCreate(t *testing.T) {
 				}
 				_ = json.NewEncoder(w).Encode(map[string]string{"id": "ep-created"})
 			default:
-				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+				t.Fatalf("unexpected request: %q %q", r.Method, r.URL.Path)
 			}
 		}))
 		defer server.Close()
@@ -463,64 +463,64 @@ func TestCreate(t *testing.T) {
 		}
 
 		if !reflect.DeepEqual(order, []string{"template", "endpoint"}) {
-			t.Fatalf("Create() call order = %v", order)
+			t.Errorf("Create() call order = %v", order)
 		}
 		if meta.GetExternalName(ep) != "ep-created" {
-			t.Fatalf("Create() external name = %q, want %q", meta.GetExternalName(ep), "ep-created")
+			t.Errorf("Create() external name = %q, want %q", meta.GetExternalName(ep), "ep-created")
 		}
 		if gotTemplate.Name != "vllm-small" || gotTemplate.ImageName != "runpod/worker-v1-vllm:stable" {
-			t.Fatalf("Create() template request = %#v", gotTemplate)
+			t.Errorf("Create() template request = %#v", gotTemplate)
 		}
 		if !gotTemplate.IsServerless {
-			t.Fatal("Create() template request isServerless = false, want true")
+			t.Error("Create() template request isServerless = false, want true")
 		}
 		if !reflect.DeepEqual(gotTemplate.Env, map[string]string{"MODEL_NAME": "Qwen/Qwen2.5-Coder-7B-Instruct"}) {
-			t.Fatalf("Create() template env = %#v", gotTemplate.Env)
+			t.Errorf("Create() template env = %#v", gotTemplate.Env)
 		}
 		if gotEndpoint.TemplateID != "tpl-created" {
-			t.Fatalf("Create() endpoint templateId = %q, want %q", gotEndpoint.TemplateID, "tpl-created")
+			t.Errorf("Create() endpoint templateId = %q, want %q", gotEndpoint.TemplateID, "tpl-created")
 		}
 		if gotEndpoint.Name == nil || *gotEndpoint.Name != "vllm-small" {
-			t.Fatalf("Create() endpoint name = %#v, want %q", gotEndpoint.Name, "vllm-small")
+			t.Errorf("Create() endpoint name = %#v, want %q", gotEndpoint.Name, "vllm-small")
 		}
 		if !reflect.DeepEqual(gotEndpoint.GPUTypeIDs, []string{"NVIDIA GeForce RTX 3090"}) {
-			t.Fatalf("Create() endpoint gpuTypeIds = %#v", gotEndpoint.GPUTypeIDs)
+			t.Errorf("Create() endpoint gpuTypeIds = %#v", gotEndpoint.GPUTypeIDs)
 		}
 		if gotEndpoint.WorkersMin == nil || *gotEndpoint.WorkersMin != 0 {
-			t.Fatalf("Create() endpoint workersMin = %#v, want 0", gotEndpoint.WorkersMin)
+			t.Errorf("Create() endpoint workersMin = %#v, want 0", gotEndpoint.WorkersMin)
 		}
 		if gotEndpoint.WorkersMax == nil || *gotEndpoint.WorkersMax != 2 {
-			t.Fatalf("Create() endpoint workersMax = %#v, want 2", gotEndpoint.WorkersMax)
+			t.Errorf("Create() endpoint workersMax = %#v, want 2", gotEndpoint.WorkersMax)
 		}
 		if gotEndpoint.ScalerType == nil || *gotEndpoint.ScalerType != "QUEUE_DELAY" {
-			t.Fatalf("Create() endpoint scalerType = %#v", gotEndpoint.ScalerType)
+			t.Errorf("Create() endpoint scalerType = %#v", gotEndpoint.ScalerType)
 		}
 		if gotEndpoint.ComputeType == nil || *gotEndpoint.ComputeType != "CPU" {
-			t.Fatalf("Create() endpoint computeType = %#v, want %q", gotEndpoint.ComputeType, "CPU")
+			t.Errorf("Create() endpoint computeType = %#v, want %q", gotEndpoint.ComputeType, "CPU")
 		}
 		if gotEndpoint.VCPUCount == nil || *gotEndpoint.VCPUCount != 4 {
-			t.Fatalf("Create() endpoint vcpuCount = %#v, want 4", gotEndpoint.VCPUCount)
+			t.Errorf("Create() endpoint vcpuCount = %#v, want 4", gotEndpoint.VCPUCount)
 		}
 		if !reflect.DeepEqual(gotEndpoint.CPUFlavorIDs, []string{"cpu3c"}) {
-			t.Fatalf("Create() endpoint cpuFlavorIds = %#v", gotEndpoint.CPUFlavorIDs)
+			t.Errorf("Create() endpoint cpuFlavorIds = %#v", gotEndpoint.CPUFlavorIDs)
 		}
 		if !reflect.DeepEqual(gotEndpoint.AllowedCudaVersions, []string{"12.1"}) {
-			t.Fatalf("Create() endpoint allowedCudaVersions = %#v", gotEndpoint.AllowedCudaVersions)
+			t.Errorf("Create() endpoint allowedCudaVersions = %#v", gotEndpoint.AllowedCudaVersions)
 		}
 		if gotEndpoint.MinCudaVersion == nil || *gotEndpoint.MinCudaVersion != "11.8" {
-			t.Fatalf("Create() endpoint minCudaVersion = %#v", gotEndpoint.MinCudaVersion)
+			t.Errorf("Create() endpoint minCudaVersion = %#v", gotEndpoint.MinCudaVersion)
 		}
 		if !reflect.DeepEqual(gotEndpoint.NetworkVolumeIDs, []string{"nv-1", "nv-2"}) {
-			t.Fatalf("Create() endpoint networkVolumeIds = %#v", gotEndpoint.NetworkVolumeIDs)
+			t.Errorf("Create() endpoint networkVolumeIds = %#v", gotEndpoint.NetworkVolumeIDs)
 		}
 		if !reflect.DeepEqual(gotTemplate.DockerStartCmd, []string{"python", "run.py"}) {
-			t.Fatalf("Create() template dockerStartCmd = %#v", gotTemplate.DockerStartCmd)
+			t.Errorf("Create() template dockerStartCmd = %#v", gotTemplate.DockerStartCmd)
 		}
 		if !reflect.DeepEqual(gotTemplate.DockerEntrypoint, []string{"/bin/sh"}) {
-			t.Fatalf("Create() template dockerEntrypoint = %#v", gotTemplate.DockerEntrypoint)
+			t.Errorf("Create() template dockerEntrypoint = %#v", gotTemplate.DockerEntrypoint)
 		}
 		if gotTemplate.ContainerRegistryAuthID == nil || *gotTemplate.ContainerRegistryAuthID != "auth-1" {
-			t.Fatalf("Create() template containerRegistryAuthId = %#v", gotTemplate.ContainerRegistryAuthID)
+			t.Errorf("Create() template containerRegistryAuthId = %#v", gotTemplate.ContainerRegistryAuthID)
 		}
 		wantDetails := managed.ConnectionDetails{
 			"endpointId": []byte("ep-created"),
@@ -528,7 +528,7 @@ func TestCreate(t *testing.T) {
 			"openaiUrl":  []byte("https://api.runpod.ai/v2/ep-created/openai/v1"),
 		}
 		if !reflect.DeepEqual(got.ConnectionDetails, wantDetails) {
-			t.Fatalf("Create() connection details = %#v, want %#v", got.ConnectionDetails, wantDetails)
+			t.Errorf("Create() connection details = %#v, want %#v", got.ConnectionDetails, wantDetails)
 		}
 	})
 
@@ -562,7 +562,7 @@ func TestCreate(t *testing.T) {
 				templateDeleted = true
 				w.WriteHeader(http.StatusNoContent)
 			default:
-				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+				t.Fatalf("unexpected request: %q %q", r.Method, r.URL.Path)
 			}
 		}))
 		defer server.Close()
@@ -597,7 +597,7 @@ func TestCreate(t *testing.T) {
 				_ = json.NewEncoder(w).Encode(map[string]string{"id": "ep-created"})
 				return
 			}
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			t.Fatalf("unexpected request: %q %q", r.Method, r.URL.Path)
 		}))
 		defer server.Close()
 
@@ -704,43 +704,43 @@ func TestUpdate(t *testing.T) {
 			t.Fatalf("Update() endpoint PATCH count = %d, want 3", len(endpointPatchBodies))
 		}
 		if got := endpointPatchBodies[1].WorkersMax; got == nil || *got != 0 {
-			t.Fatalf("Update() recycle first PATCH workersMax = %#v, want 0", got)
+			t.Errorf("Update() recycle first PATCH workersMax = %#v, want 0", got)
 		}
 		if got := endpointPatchBodies[2].WorkersMax; got == nil || *got != 2 {
-			t.Fatalf("Update() recycle restore PATCH workersMax = %#v, want 2", got)
+			t.Errorf("Update() recycle restore PATCH workersMax = %#v, want 2", got)
 		}
 		if gotEndpoint.WorkersMax == nil || *gotEndpoint.WorkersMax != 2 {
-			t.Fatalf("Update() endpoint workersMax = %#v, want 2", gotEndpoint.WorkersMax)
+			t.Errorf("Update() endpoint workersMax = %#v, want 2", gotEndpoint.WorkersMax)
 		}
 		if gotEndpoint.IdleTimeout == nil || *gotEndpoint.IdleTimeout != 60 {
-			t.Fatalf("Update() endpoint idleTimeout = %#v, want 60", gotEndpoint.IdleTimeout)
+			t.Errorf("Update() endpoint idleTimeout = %#v, want 60", gotEndpoint.IdleTimeout)
 		}
 		if gotEndpoint.VCPUCount == nil || *gotEndpoint.VCPUCount != 4 {
-			t.Fatalf("Update() endpoint vcpuCount = %#v, want 4", gotEndpoint.VCPUCount)
+			t.Errorf("Update() endpoint vcpuCount = %#v, want 4", gotEndpoint.VCPUCount)
 		}
 		if !reflect.DeepEqual(gotEndpoint.CPUFlavorIDs, []string{"cpu3c"}) {
-			t.Fatalf("Update() endpoint cpuFlavorIds = %#v", gotEndpoint.CPUFlavorIDs)
+			t.Errorf("Update() endpoint cpuFlavorIds = %#v", gotEndpoint.CPUFlavorIDs)
 		}
 		if !reflect.DeepEqual(gotEndpoint.AllowedCudaVersions, []string{"12.1"}) {
-			t.Fatalf("Update() endpoint allowedCudaVersions = %#v", gotEndpoint.AllowedCudaVersions)
+			t.Errorf("Update() endpoint allowedCudaVersions = %#v", gotEndpoint.AllowedCudaVersions)
 		}
 		if gotEndpoint.MinCudaVersion == nil || *gotEndpoint.MinCudaVersion != "11.8" {
-			t.Fatalf("Update() endpoint minCudaVersion = %#v", gotEndpoint.MinCudaVersion)
+			t.Errorf("Update() endpoint minCudaVersion = %#v", gotEndpoint.MinCudaVersion)
 		}
 		if !reflect.DeepEqual(gotEndpoint.NetworkVolumeIDs, []string{"nv-1", "nv-2"}) {
-			t.Fatalf("Update() endpoint networkVolumeIds = %#v", gotEndpoint.NetworkVolumeIDs)
+			t.Errorf("Update() endpoint networkVolumeIds = %#v", gotEndpoint.NetworkVolumeIDs)
 		}
 		if gotTemplate.ImageName == nil || *gotTemplate.ImageName != "runpod/worker-v1-vllm:stable" {
-			t.Fatalf("Update() template imageName = %#v", gotTemplate.ImageName)
+			t.Errorf("Update() template imageName = %#v", gotTemplate.ImageName)
 		}
 		if !reflect.DeepEqual(gotTemplate.DockerStartCmd, []string{"python", "run.py"}) {
-			t.Fatalf("Update() template dockerStartCmd = %#v", gotTemplate.DockerStartCmd)
+			t.Errorf("Update() template dockerStartCmd = %#v", gotTemplate.DockerStartCmd)
 		}
 		if !reflect.DeepEqual(gotTemplate.DockerEntrypoint, []string{"/bin/sh"}) {
-			t.Fatalf("Update() template dockerEntrypoint = %#v", gotTemplate.DockerEntrypoint)
+			t.Errorf("Update() template dockerEntrypoint = %#v", gotTemplate.DockerEntrypoint)
 		}
 		if gotTemplate.ContainerRegistryAuthID == nil || *gotTemplate.ContainerRegistryAuthID != "auth-1" {
-			t.Fatalf("Update() template containerRegistryAuthId = %#v", gotTemplate.ContainerRegistryAuthID)
+			t.Errorf("Update() template containerRegistryAuthId = %#v", gotTemplate.ContainerRegistryAuthID)
 		}
 	})
 
@@ -1003,7 +1003,7 @@ func TestUpdate(t *testing.T) {
 				templatePatched = true
 				_ = json.NewEncoder(w).Encode(map[string]string{"id": "tpl-xyz"})
 			default:
-				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+				t.Fatalf("unexpected request: %q %q", r.Method, r.URL.Path)
 			}
 		}))
 		defer server.Close()
@@ -1037,7 +1037,7 @@ func TestUpdate(t *testing.T) {
 				_ = json.NewEncoder(w).Encode(map[string]string{"id": "ep-123"})
 				return
 			}
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			t.Fatalf("unexpected request: %q %q", r.Method, r.URL.Path)
 		}))
 		defer server.Close()
 

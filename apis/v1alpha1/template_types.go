@@ -69,8 +69,11 @@ type TemplateParameters struct {
 
 // TemplateObservation captures the observed state returned by RunPod.
 type TemplateObservation struct {
+	// RunPod template ID, mirrored from the external name.
 	TemplateID string `json:"templateId,omitempty"`
-	Name       string `json:"name,omitempty"`
+
+	// Template name as reported by RunPod.
+	Name string `json:"name,omitempty"`
 }
 
 // TemplateSpec defines the desired state of a RunPod Template resource.
@@ -89,6 +92,10 @@ type TemplateStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Namespaced,categories=crossplane
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
+// +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
+// +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
+// +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 type Template struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

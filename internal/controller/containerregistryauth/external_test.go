@@ -152,21 +152,21 @@ func TestObserve(t *testing.T) {
 				return
 			}
 			if got.ResourceUpToDate != tc.want.upToDate {
-				t.Fatalf("Observe() ResourceUpToDate = %v, want %v", got.ResourceUpToDate, tc.want.upToDate)
+				t.Errorf("Observe() ResourceUpToDate = %v, want %v", got.ResourceUpToDate, tc.want.upToDate)
 			}
 			ready := cra.GetCondition(xpv2.TypeReady)
 			if ready.Status != tc.want.readyStatus {
-				t.Fatalf("Observe() Ready status = %v, want %v", ready.Status, tc.want.readyStatus)
+				t.Errorf("Observe() Ready status = %v, want %v", ready.Status, tc.want.readyStatus)
 			}
 			at := cra.Status.AtProvider
 			if at.ContainerRegistryAuthID != tc.want.id {
-				t.Fatalf("Observe() ContainerRegistryAuthID = %q, want %q", at.ContainerRegistryAuthID, tc.want.id)
+				t.Errorf("Observe() ContainerRegistryAuthID = %q, want %q", at.ContainerRegistryAuthID, tc.want.id)
 			}
 			if at.Name != tc.want.name {
-				t.Fatalf("Observe() Name = %q, want %q", at.Name, tc.want.name)
+				t.Errorf("Observe() Name = %q, want %q", at.Name, tc.want.name)
 			}
 			if !reflect.DeepEqual(got.ConnectionDetails, tc.want.connection) {
-				t.Fatalf("Observe() ConnectionDetails = %#v, want %#v", got.ConnectionDetails, tc.want.connection)
+				t.Errorf("Observe() ConnectionDetails = %#v, want %#v", got.ConnectionDetails, tc.want.connection)
 			}
 		})
 	}
@@ -210,7 +210,7 @@ func TestCreate(t *testing.T) {
 			t.Fatalf("Create() error = %v", err)
 		}
 		if gotPath != "/containerregistryauth" {
-			t.Fatalf("Create() path = %q, want /containerregistryauth", gotPath)
+			t.Fatalf("Create() path = %q, want %q", gotPath, "/containerregistryauth")
 		}
 		if gotBody.Name != "ghcr" || gotBody.Username != "my-user" || gotBody.Password != "my-pass" {
 			t.Fatalf("Create() request = %#v", gotBody)

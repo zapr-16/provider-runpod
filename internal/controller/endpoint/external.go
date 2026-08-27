@@ -61,7 +61,7 @@ func (e *external) Observe(ctx context.Context, mg xpresource.Managed) (managed.
 		return managed.ExternalObservation{ResourceExists: false}, nil
 	}
 
-	runtimeEndpoint := fmt.Sprintf("%s/%s", dataPlaneBaseURL, response.ID)
+	runtimeEndpoint := runtimeEndpointURL(response.ID)
 	ep.Status.AtProvider = v1alpha1.EndpointObservation{
 		EndpointID:      response.ID,
 		TemplateID:      response.TemplateID,
@@ -409,6 +409,9 @@ func hasTemplateDrift(spec v1alpha1.EndpointParameters, observed runpodclient.Te
 	return false
 }
 
+// countRunningWorkers counts workers with desiredStatus RUNNING: the workers
+// array is the only place RunPod returns per-worker status, and
+// desiredStatus is the only status field it carries.
 func countRunningWorkers(workers []runpodclient.EndpointWorker) int32 {
 	var n int32
 	for _, w := range workers {
@@ -419,12 +422,19 @@ func countRunningWorkers(workers []runpodclient.EndpointWorker) int32 {
 	return n
 }
 
+// runtimeEndpointURL builds the serverless data-plane base URL for an
+// endpoint ID, shared by Observe() and connectionDetails() so both compute
+// it identically.
+func runtimeEndpointURL(id string) string {
+	return fmt.Sprintf("%s/%s", dataPlaneBaseURL, id)
+}
+
 func connectionDetails(endpointID string) managed.ConnectionDetails {
-	base := fmt.Sprintf("%s/%s", dataPlaneBaseURL, endpointID)
+	base := runtimeEndpointURL(endpointID)
 	return managed.ConnectionDetails{
-		"endpointId": []byte(endpointID),
-		"endpoint":   []byte(base),
-		"openaiUrl":  []byte(base + "/openai/v1"),
+		"endpointId":                      []byte(endpointID),
+		xpv2.CredentialsSecretEndpointKey: []byte(base),
+		"openaiUrl":                       []byte(base + "/openai/v1"),
 	}
 }
 
