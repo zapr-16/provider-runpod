@@ -1,6 +1,7 @@
 package containerregistryauth
 
 import (
+	xpcontroller "github.com/crossplane/crossplane-runtime/v2/pkg/controller"
 	managed "github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
 	xpresource "github.com/crossplane/crossplane-runtime/v2/pkg/resource"
 	"github.com/go-logr/logr"
@@ -21,7 +22,7 @@ var _ managed.ExternalClient = (*external)(nil)
 
 // Setup registers the ContainerRegistryAuth managed-resource controller
 // with the manager.
-func Setup(mgr ctrl.Manager, log logr.Logger) error {
+func Setup(mgr ctrl.Manager, log logr.Logger, o xpcontroller.Options) error {
 	kube := mgr.GetClient()
 	conn := &register.Connector[*v1alpha1.ContainerRegistryAuth]{
 		Kube:                     kube,
@@ -37,5 +38,5 @@ func Setup(mgr ctrl.Manager, log logr.Logger) error {
 			}
 		},
 	}
-	return register.ManagedController(mgr, "ContainerRegistryAuth", &v1alpha1.ContainerRegistryAuth{}, conn, log)
+	return register.ManagedController(mgr, "ContainerRegistryAuth", &v1alpha1.ContainerRegistryAuth{}, &v1alpha1.ContainerRegistryAuthList{}, conn, log, o)
 }

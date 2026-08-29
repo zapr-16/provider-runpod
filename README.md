@@ -76,6 +76,21 @@ for credentials that should only be usable from a single namespace; set
 `spec.providerConfigRef: {name: default, kind: ProviderConfig}` on the
 `Pod`/`Endpoint` to use it.
 
+### Runtime flags
+
+The controller binary accepts the following flags (set via
+`spec.controllerConfigRef`/`DeploymentRuntimeConfig` `args`, or directly on
+the container command when running outside Crossplane's package manager):
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--debug` | `false` | Development zap logging (human-readable, more verbose) instead of production JSON. |
+| `--poll-interval` | `1m` | How often each resource is polled for drift when no watch event has triggered a reconcile. |
+| `--max-reconcile-rate` | `10` | Global maximum reconciles per second across every controller. |
+| `--leader-election` | `true` | Use leader election for the controller manager. |
+| `--sync-interval` | `1h` | How often the manager's watch cache resyncs against the API server. |
+| `--enable-management-policies` | `true` | Enable Crossplane's beta Management Policies support. |
+
 ## Create a Pod
 
 ```yaml

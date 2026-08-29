@@ -1,6 +1,7 @@
 package pod
 
 import (
+	xpcontroller "github.com/crossplane/crossplane-runtime/v2/pkg/controller"
 	managed "github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
 	xpresource "github.com/crossplane/crossplane-runtime/v2/pkg/resource"
 	"github.com/go-logr/logr"
@@ -29,7 +30,7 @@ func newExternal(rc *runpodclient.Client, cr *v1alpha1.Pod, log logr.Logger) man
 }
 
 // Setup registers the Pod managed-resource controller with the manager.
-func Setup(mgr ctrl.Manager, log logr.Logger) error {
+func Setup(mgr ctrl.Manager, log logr.Logger, o xpcontroller.Options) error {
 	conn := &register.Connector[*v1alpha1.Pod]{
 		Kube:                     mgr.GetClient(),
 		Usage:                    xpresource.NewProviderConfigUsageTracker(mgr.GetClient(), &v1beta1.ProviderConfigUsage{}),
@@ -38,5 +39,5 @@ func Setup(mgr ctrl.Manager, log logr.Logger) error {
 		ErrMissingProviderConfig: errMissingProviderConfig,
 		NewExternal:              newExternal,
 	}
-	return register.ManagedController(mgr, "Pod", &v1alpha1.Pod{}, conn, log)
+	return register.ManagedController(mgr, "Pod", &v1alpha1.Pod{}, &v1alpha1.PodList{}, conn, log, o)
 }

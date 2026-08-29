@@ -29,6 +29,17 @@ rules:
       - create
       - patch
       - update
+  # Safe-start: the CRD gate watches CustomResourceDefinitions cluster-wide
+  # to know when this provider's own CRDs are Established before it
+  # registers the controllers that depend on them.
+  - apiGroups:
+      - apiextensions.k8s.io
+    resources:
+      - customresourcedefinitions
+    verbs:
+      - get
+      - list
+      - watch
   # Leader election locks.
   - apiGroups:
       - coordination.k8s.io

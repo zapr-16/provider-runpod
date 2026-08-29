@@ -5,14 +5,21 @@ package register
 
 import (
 	"context"
+	"os"
 
+	xpcontroller "github.com/crossplane/crossplane-runtime/v2/pkg/controller"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/feature"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/ratelimiter"
 	managed "github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
 	xpresource "github.com/crossplane/crossplane-runtime/v2/pkg/resource"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/statemetrics"
 	"github.com/go-logr/logr"
 	"github.com/pkg/errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	v1alpha1 "github.com/zapr-16/provider-runpod/apis/v1alpha1"
 	runpodclient "github.com/zapr-16/provider-runpod/internal/clients"
@@ -70,18 +77,90 @@ func (c *Connector[T]) Connect(ctx context.Context, mg xpresource.Managed) (mana
 	return c.NewExternal(rc, cr, c.Log), nil
 }
 
+// Gated defers fn until gate reports gvk's CustomResourceDefinition as
+// Established, so that controllers watching provider-owned CRDs can be set
+// up before those CRDs exist without crash-looping. If gate is nil, fn runs
+// immediately (the non-gated default). Because the gate releases fn from a
+// background goroutine, there is no synchronous caller left to report a
+// setup failure to; it is treated the same as any other fatal startup
+// error.
+func Gated(gate xpcontroller.Gate, gvk schema.GroupVersionKind, log logr.Logger, fn func() error) error {
+	if gate == nil {
+		return fn()
+	}
+
+	gate.Register(func() {
+		if err := fn(); err != nil {
+			log.Error(err, "cannot set up gated controller", "gvk", gvk)
+			os.Exit(1)
+		}
+	}, gvk)
+
+	return nil
+}
+
 // ManagedController registers a managed-resource reconciler for the given
 // kind, delegating external-client construction to the kind's connector.
-func ManagedController(mgr ctrl.Manager, kind string, obj client.Object, conn managed.ExternalConnector, log logr.Logger) error {
-	name := xpresource.ManagedKind(v1alpha1.SchemeGroupVersion.WithKind(kind))
-	r := managed.NewReconciler(
-		mgr,
-		name,
-		managed.WithExternalConnector(conn),
-		managed.WithLogger(logging.NewLogrLogger(log)),
-	)
+// list is a fresh, empty list of the kind (e.g. &v1alpha1.PodList{}), used
+// only to drive the optional state-metrics recorder. o carries the poll
+// interval, feature flags, rate limiting, metric recorders, and the
+// safe-start gate shared by every kind in this provider; every option is
+// wired here once instead of being repeated at each call site.
+//
+// When o.Gate is set, controller registration is deferred until the kind's
+// CustomResourceDefinition is Established, so the provider can start (and
+// report healthy) before its own CRDs exist in the cluster. If registration
+// fails once the gate releases it, there is no synchronous caller left to
+// report the error to, so it is treated as fatal, matching how every other
+// setup failure in this provider is handled at startup.
+func ManagedController(mgr ctrl.Manager, kind string, obj client.Object, list xpresource.ManagedList, conn managed.ExternalConnector, log logr.Logger, o xpcontroller.Options) error {
+	gvk := v1alpha1.SchemeGroupVersion.WithKind(kind)
+	name := xpresource.ManagedKind(gvk)
 
-	return ctrl.NewControllerManagedBy(mgr).
-		For(obj).
-		Complete(r)
+	setup := func() error {
+		ropts := []managed.ReconcilerOption{
+			managed.WithExternalConnector(conn),
+			managed.WithLogger(logging.NewLogrLogger(log)),
+			managed.WithPollInterval(o.PollInterval),
+		}
+		if o.Features.Enabled(feature.EnableBetaManagementPolicies) {
+			ropts = append(ropts, managed.WithManagementPolicies())
+		}
+		if o.MetricOptions != nil && o.MetricOptions.MRMetrics != nil {
+			ropts = append(ropts, managed.WithMetricRecorder(o.MetricOptions.MRMetrics))
+		}
+
+		r := managed.NewReconciler(mgr, name, ropts...)
+
+		// Wrap the reconciler with the provider-wide rate limiter so the
+		// aggregate reconcile rate across every kind stays bounded,
+		// independent of the per-controller item backoff below.
+		var rec reconcile.Reconciler = r
+		if o.GlobalRateLimiter != nil {
+			rec = ratelimiter.NewReconciler(kind, r, o.GlobalRateLimiter)
+		}
+
+		if err := ctrl.NewControllerManagedBy(mgr).
+			For(obj).
+			WithOptions(o.ForControllerRuntime()).
+			Complete(rec); err != nil {
+			return err
+		}
+
+		if o.MetricOptions != nil && o.MetricOptions.MRStateMetrics != nil {
+			interval := o.MetricOptions.PollStateMetricInterval
+			if interval <= 0 {
+				interval = o.PollInterval
+			}
+
+			recorder := statemetrics.NewMRStateRecorder(mgr.GetClient(), logging.NewLogrLogger(log), o.MetricOptions.MRStateMetrics, list, interval)
+			if err := mgr.Add(recorder); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	}
+
+	return Gated(o.Gate, gvk, log, setup)
 }

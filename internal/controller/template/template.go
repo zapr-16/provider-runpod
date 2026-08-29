@@ -1,6 +1,7 @@
 package template
 
 import (
+	xpcontroller "github.com/crossplane/crossplane-runtime/v2/pkg/controller"
 	managed "github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
 	xpresource "github.com/crossplane/crossplane-runtime/v2/pkg/resource"
 	"github.com/go-logr/logr"
@@ -20,7 +21,7 @@ const (
 var _ managed.ExternalClient = (*external)(nil)
 
 // Setup registers the Template managed-resource controller with the manager.
-func Setup(mgr ctrl.Manager, log logr.Logger) error {
+func Setup(mgr ctrl.Manager, log logr.Logger, o xpcontroller.Options) error {
 	conn := &register.Connector[*v1alpha1.Template]{
 		Kube:                     mgr.GetClient(),
 		Usage:                    xpresource.NewProviderConfigUsageTracker(mgr.GetClient(), &v1beta1.ProviderConfigUsage{}),
@@ -34,5 +35,5 @@ func Setup(mgr ctrl.Manager, log logr.Logger) error {
 			}
 		},
 	}
-	return register.ManagedController(mgr, "Template", &v1alpha1.Template{}, conn, log)
+	return register.ManagedController(mgr, "Template", &v1alpha1.Template{}, &v1alpha1.TemplateList{}, conn, log, o)
 }
