@@ -12,7 +12,7 @@ XPKG_REG  ?= ghcr.io/zapr-16
 XPKG_NAME ?= provider-runpod
 # Keep in sync with the controller image tag in package/crossplane.yaml and
 # the install command in README.md.
-XPKG_TAG  ?= v0.5.0
+XPKG_TAG  ?= v0.6.0
 XPKG_FILE := $(XPKG_NAME)-$(XPKG_TAG).xpkg
 
 help: ## Print available targets
