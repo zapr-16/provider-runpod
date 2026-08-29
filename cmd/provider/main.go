@@ -1,3 +1,4 @@
+// Command provider runs the RunPod Crossplane provider's controller manager.
 package main
 
 import (
@@ -54,12 +55,17 @@ func main() {
 		_, _ = os.Stderr.WriteString(err.Error() + "\n")
 		os.Exit(1)
 	}
-	defer func() {
-		_ = zapLogger.Sync()
-	}()
-
 	logger := zapr.NewLogger(zapLogger)
 	ctrl.SetLogger(logger)
+
+	// fatal logs err and exits. It flushes the zap logger first: a bare
+	// os.Exit after logging would otherwise drop any buffered log lines,
+	// since there is no deferred Sync left to run once the process exits.
+	fatal := func(err error, msg string) {
+		logger.Error(err, msg)
+		_ = zapLogger.Sync()
+		os.Exit(1)
+	}
 
 	s := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(s))
@@ -92,17 +98,14 @@ func main() {
 		},
 	})
 	if err != nil {
-		logger.Error(errors.Wrap(err, errCreateManager), "manager setup failed")
-		os.Exit(1)
+		fatal(errors.Wrap(err, errCreateManager), "manager setup failed")
 	}
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
-		logger.Error(err, "cannot add health check")
-		os.Exit(1)
+		fatal(err, "cannot add health check")
 	}
 	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
-		logger.Error(err, "cannot add readiness check")
-		os.Exit(1)
+		fatal(err, "cannot add readiness check")
 	}
 
 	features := &feature.Flags{}
@@ -136,8 +139,7 @@ func main() {
 	}
 
 	if err := customresourcesgate.Setup(mgr, o); err != nil {
-		logger.Error(err, "cannot set up CRD gate controller")
-		os.Exit(1)
+		fatal(err, "cannot set up CRD gate controller")
 	}
 
 	// ProviderConfig, ClusterProviderConfig, and ProviderConfigUsage are not
@@ -146,48 +148,39 @@ func main() {
 	// billing side effect, so the only cost of leaving them ungated is
 	// benign controller-runtime retry logging until the CRD appears.
 	if err := providerconfigcontroller.SetupWithManager(mgr, zapLogger.Named("providerconfig")); err != nil {
-		logger.Error(err, "cannot set up ProviderConfig controller")
-		os.Exit(1)
+		fatal(err, "cannot set up ProviderConfig controller")
 	}
 
 	if err := providerconfigcontroller.SetupClusterWithManager(mgr, zapLogger.Named("clusterproviderconfig")); err != nil {
-		logger.Error(err, "cannot set up ClusterProviderConfig controller")
-		os.Exit(1)
+		fatal(err, "cannot set up ClusterProviderConfig controller")
 	}
 
 	if err := providerconfigcontroller.SetupUsageTracking(mgr, logger.WithName("providerconfig-usage")); err != nil {
-		logger.Error(err, "cannot set up ProviderConfig usage controller")
-		os.Exit(1)
+		fatal(err, "cannot set up ProviderConfig usage controller")
 	}
 
 	if err := podcontroller.Setup(mgr, logger.WithName("pod"), o); err != nil {
-		logger.Error(err, "cannot set up Pod controller")
-		os.Exit(1)
+		fatal(err, "cannot set up Pod controller")
 	}
 
 	if err := endpointcontroller.Setup(mgr, logger.WithName("endpoint"), o); err != nil {
-		logger.Error(err, "cannot set up Endpoint controller")
-		os.Exit(1)
+		fatal(err, "cannot set up Endpoint controller")
 	}
 
 	if err := networkvolumecontroller.Setup(mgr, logger.WithName("networkvolume"), o); err != nil {
-		logger.Error(err, "cannot set up NetworkVolume controller")
-		os.Exit(1)
+		fatal(err, "cannot set up NetworkVolume controller")
 	}
 
 	if err := containerregistryauthcontroller.Setup(mgr, logger.WithName("containerregistryauth"), o); err != nil {
-		logger.Error(err, "cannot set up ContainerRegistryAuth controller")
-		os.Exit(1)
+		fatal(err, "cannot set up ContainerRegistryAuth controller")
 	}
 
 	if err := templatecontroller.Setup(mgr, logger.WithName("template"), o); err != nil {
-		logger.Error(err, "cannot set up Template controller")
-		os.Exit(1)
+		fatal(err, "cannot set up Template controller")
 	}
 
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
-		logger.Error(err, "manager exited with error")
-		os.Exit(1)
+		fatal(err, "manager exited with error")
 	}
 }
 

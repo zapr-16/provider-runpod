@@ -30,7 +30,7 @@ import (
 func newPingServer(t *testing.T, status int) *httptest.Server {
 	t.Helper()
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(status)
 	}))
 	t.Cleanup(srv.Close)
@@ -586,7 +586,7 @@ func TestReconcileGetErrorOtherThanNotFoundIsWrapped(t *testing.T) {
 		WithObjects(pc).
 		WithStatusSubresource(pc).
 		WithInterceptorFuncs(interceptor.Funcs{
-			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			Get: func(_ context.Context, _ client.WithWatch, _ client.ObjectKey, _ client.Object, _ ...client.GetOption) error {
 				return errors.New("etcd unavailable")
 			},
 		}).
@@ -614,7 +614,7 @@ func TestClusterReconcileGetErrorOtherThanNotFoundIsWrapped(t *testing.T) {
 		WithObjects(pc).
 		WithStatusSubresource(pc).
 		WithInterceptorFuncs(interceptor.Funcs{
-			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			Get: func(_ context.Context, _ client.WithWatch, _ client.ObjectKey, _ client.Object, _ ...client.GetOption) error {
 				return errors.New("etcd unavailable")
 			},
 		}).

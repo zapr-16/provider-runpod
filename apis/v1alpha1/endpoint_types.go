@@ -291,7 +291,7 @@ func (l *EndpointList) GetItems() []resource.Managed {
 
 // Endpoint type metadata.
 var (
-	EndpointKind             = reflect.TypeOf(Endpoint{}).Name()
+	EndpointKind             = reflect.TypeFor[Endpoint]().Name()
 	EndpointGroupKind        = schema.GroupKind{Group: Group, Kind: EndpointKind}.String()
 	EndpointKindAPIVersion   = EndpointKind + "." + SchemeGroupVersion.String()
 	EndpointGroupVersionKind = SchemeGroupVersion.WithKind(EndpointKind)

@@ -35,7 +35,7 @@ func TestPingValidCredentialsReturnsNil(t *testing.T) {
 // current validateCredentials only checks the secret is non-empty, so a
 // revoked key would still be reported Available without this check.
 func TestPingUnauthorizedReturnsError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte(`{"error":"invalid api key"}`))
 	}))
@@ -54,7 +54,7 @@ func TestPingUnauthorizedReturnsError(t *testing.T) {
 // TestPingForbiddenReturnsError covers the other credential-rejection
 // status the RunPod API can return.
 func TestPingForbiddenReturnsError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
 	}))
 	defer srv.Close()
@@ -70,7 +70,7 @@ func TestPingForbiddenReturnsError(t *testing.T) {
 // Available on a broken connection), even though it is not necessarily an
 // invalid-credentials condition.
 func TestPingServerErrorReturnsError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer srv.Close()

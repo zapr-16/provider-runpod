@@ -1,3 +1,5 @@
+// Package containerregistryauth reconciles the RunPod ContainerRegistryAuth
+// managed resource.
 package containerregistryauth
 
 import (

@@ -1,3 +1,4 @@
+// Package endpoint reconciles the RunPod Endpoint managed resource.
 package endpoint
 
 import (

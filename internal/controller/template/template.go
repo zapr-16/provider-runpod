@@ -1,3 +1,4 @@
+// Package template reconciles the RunPod Template managed resource.
 package template
 
 import (

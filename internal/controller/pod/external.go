@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -158,29 +159,11 @@ func podIdentityMatches(spec v1alpha1.PodParameters, r *runpodclient.PodResponse
 	if spec.ImageName != nil && *spec.ImageName != r.Image {
 		return false
 	}
-	if len(spec.GPUTypeIDs) > 0 && r.Machine.GPUTypeID != "" {
-		matched := false
-		for _, id := range spec.GPUTypeIDs {
-			if id == r.Machine.GPUTypeID {
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			return false
-		}
+	if len(spec.GPUTypeIDs) > 0 && r.Machine.GPUTypeID != "" && !slices.Contains(spec.GPUTypeIDs, r.Machine.GPUTypeID) {
+		return false
 	}
-	if len(spec.CPUFlavorIDs) > 0 && r.CPUFlavorID != "" {
-		matched := false
-		for _, id := range spec.CPUFlavorIDs {
-			if id == r.CPUFlavorID {
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			return false
-		}
+	if len(spec.CPUFlavorIDs) > 0 && r.CPUFlavorID != "" && !slices.Contains(spec.CPUFlavorIDs, r.CPUFlavorID) {
+		return false
 	}
 	return true
 }

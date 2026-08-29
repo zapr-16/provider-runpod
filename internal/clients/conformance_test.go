@@ -119,8 +119,8 @@ func jsonFieldNames(t *testing.T, typ reflect.Type) map[string]bool {
 	t.Helper()
 
 	names := map[string]bool{}
-	for i := 0; i < typ.NumField(); i++ {
-		tag := typ.Field(i).Tag.Get("json")
+	for field := range typ.Fields() {
+		tag := field.Tag.Get("json")
 		if tag == "" || tag == "-" {
 			continue
 		}
@@ -169,7 +169,7 @@ func TestRequestStructsMatchOpenAPISpec(t *testing.T) {
 			name:   "Pod",
 			method: "post",
 			path:   "/pods",
-			typ:    reflect.TypeOf(CreatePodRequest{}),
+			typ:    reflect.TypeFor[CreatePodRequest](),
 			syntheticStructFields: map[string]string{
 				// volumeEncrypted has been part of this provider's Pod API
 				// surface since before this spec snapshot was vendored; the
@@ -182,13 +182,13 @@ func TestRequestStructsMatchOpenAPISpec(t *testing.T) {
 			name:   "Endpoint",
 			method: "post",
 			path:   "/endpoints",
-			typ:    reflect.TypeOf(CreateEndpointRequest{}),
+			typ:    reflect.TypeFor[CreateEndpointRequest](),
 		},
 		{
 			name:   "Template",
 			method: "post",
 			path:   "/templates",
-			typ:    reflect.TypeOf(CreateTemplateRequest{}),
+			typ:    reflect.TypeFor[CreateTemplateRequest](),
 			unsupportedSpecFields: map[string]string{
 				"category": "GPU/AMD/CPU compute category selector; the provider infers this from the Pod/Endpoint spec instead of exposing a separate field",
 				"isPublic": "the provider only ever creates private, implicit templates backing its own Pods/Endpoints, never public template listings",
@@ -199,13 +199,13 @@ func TestRequestStructsMatchOpenAPISpec(t *testing.T) {
 			name:   "NetworkVolume",
 			method: "post",
 			path:   "/networkvolumes",
-			typ:    reflect.TypeOf(CreateNetworkVolumeRequest{}),
+			typ:    reflect.TypeFor[CreateNetworkVolumeRequest](),
 		},
 		{
 			name:   "ContainerRegistryAuth",
 			method: "post",
 			path:   "/containerregistryauth",
-			typ:    reflect.TypeOf(CreateContainerRegistryAuthRequest{}),
+			typ:    reflect.TypeFor[CreateContainerRegistryAuthRequest](),
 		},
 	}
 

@@ -356,7 +356,7 @@ func (l *PodList) GetItems() []resource.Managed {
 
 // Pod type metadata.
 var (
-	PodKind             = reflect.TypeOf(Pod{}).Name()
+	PodKind             = reflect.TypeFor[Pod]().Name()
 	PodGroupKind        = schema.GroupKind{Group: Group, Kind: PodKind}.String()
 	PodKindAPIVersion   = PodKind + "." + SchemeGroupVersion.String()
 	PodGroupVersionKind = SchemeGroupVersion.WithKind(PodKind)

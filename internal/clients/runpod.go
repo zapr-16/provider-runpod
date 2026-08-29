@@ -1,3 +1,5 @@
+// Package clients implements the RunPod REST API client used by the
+// provider's managed-resource controllers.
 package clients
 
 import (
@@ -19,7 +21,7 @@ import (
 const (
 	defaultBaseURL        = "https://rest.runpod.io/v1"
 	errExtractCredentials = "cannot extract RunPod API key from ProviderConfig"
-	errEmptyCredentials   = "RunPod API key is empty"
+	errEmptyCredentials   = "RunPod API key is empty" //nolint:gosec // error message text, not a credential value
 	errCreateRequest      = "cannot create RunPod request"
 	errDoRequest          = "cannot execute RunPod request"
 	errDecodeResponse     = "cannot decode RunPod response"
@@ -175,6 +177,11 @@ func (c *Client) NewRequest(ctx context.Context, method, path string, body io.Re
 }
 
 // Do executes an HTTP request with the configured client.
+//
+// endpoint fixed at client construction (defaultBaseURL or an operator-set
+// override), not attacker-controlled input forwarded from a caller.
+//
+//nolint:gosec // G704: the request target is c.baseURL, a RunPod API
 func (c *Client) Do(req *http.Request) (*http.Response, error) {
 	return c.httpClient.Do(req)
 }

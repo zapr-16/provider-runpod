@@ -56,7 +56,7 @@ func TestCreateTemplateFullPayload(t *testing.T) {
 		ImageName:               "runpod/worker-v1-vllm:v2.25.2",
 		IsServerless:            true,
 		Env:                     map[string]string{"MODEL_NAME": "Qwen"},
-		ContainerDiskInGb:       ptrInt32(30),
+		ContainerDiskInGb:       new(int32(30)),
 		DockerStartCmd:          []string{"python3", "handler.py"},
 		DockerEntrypoint:        []string{"/bin/sh", "-c"},
 		ContainerRegistryAuthID: &authID,
@@ -333,5 +333,3 @@ func TestListEndpoints(t *testing.T) {
 		})
 	}
 }
-
-func ptrInt32(v int32) *int32 { return &v }

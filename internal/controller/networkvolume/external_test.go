@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
 	managed "github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -295,7 +295,7 @@ func TestCreate(t *testing.T) {
 	})
 
 	t.Run("CreateFailureReturnsError", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 		}))
 		defer server.Close()
@@ -349,7 +349,7 @@ func TestUpdate(t *testing.T) {
 
 	t.Run("EmptyExternalNameSkipsHTTPCalls", func(t *testing.T) {
 		var calls int
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 			calls++
 		}))
 		defer server.Close()
@@ -364,7 +364,7 @@ func TestUpdate(t *testing.T) {
 	})
 
 	t.Run("PatchFailureReturnsError", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusBadRequest)
 		}))
 		defer server.Close()
@@ -406,7 +406,7 @@ func TestDelete(t *testing.T) {
 
 	t.Run("EmptyExternalNameSkipsHTTPCalls", func(t *testing.T) {
 		var calls int
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 			calls++
 		}))
 		defer server.Close()
@@ -421,7 +421,7 @@ func TestDelete(t *testing.T) {
 	})
 
 	t.Run("NotFoundDeleteIsSuccess", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusNotFound)
 		}))
 		defer server.Close()
@@ -436,7 +436,7 @@ func TestDelete(t *testing.T) {
 	})
 
 	t.Run("ServerErrorReturnsError", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 		}))
 		defer server.Close()

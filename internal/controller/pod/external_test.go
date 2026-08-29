@@ -340,7 +340,7 @@ func TestObserve(t *testing.T) {
 		"ImageNameDriftIsNotUpToDate": {
 			externalName: "pod-123",
 			spec: v1alpha1.PodParameters{
-				ImageName: strPtr("img:v2"),
+				ImageName: new("img:v2"),
 			},
 			status:     v1alpha1.PodObservation{PodID: "existing"},
 			statusCode: http.StatusOK,
@@ -451,7 +451,7 @@ func TestObserve(t *testing.T) {
 		"InterruptibleDriftIsImmutableAndFlagged": {
 			externalName: "pod-123",
 			spec: v1alpha1.PodParameters{
-				Interruptible: ptrBool(true),
+				Interruptible: new(true),
 			},
 			status:     v1alpha1.PodObservation{PodID: "existing"},
 			statusCode: http.StatusOK,
@@ -477,7 +477,7 @@ func TestObserve(t *testing.T) {
 		"LifecycleDriftExitedSpecVsRunningObservedIsNotUpToDate": {
 			externalName: "pod-123",
 			spec: v1alpha1.PodParameters{
-				DesiredState: strPtr("EXITED"),
+				DesiredState: new("EXITED"),
 			},
 			status:     v1alpha1.PodObservation{PodID: "existing"},
 			statusCode: http.StatusOK,
@@ -502,7 +502,7 @@ func TestObserve(t *testing.T) {
 		"LifecycleDriftRunningSpecVsExitedObservedIsNotUpToDate": {
 			externalName: "pod-123",
 			spec: v1alpha1.PodParameters{
-				DesiredState: strPtr("RUNNING"),
+				DesiredState: new("RUNNING"),
 			},
 			status:     v1alpha1.PodObservation{PodID: "existing"},
 			statusCode: http.StatusOK,
@@ -530,8 +530,8 @@ func TestObserve(t *testing.T) {
 			// fire even though it's set.
 			externalName: "pod-123",
 			spec: v1alpha1.PodParameters{
-				DesiredState:        strPtr("EXITED"),
-				RecreateOnTerminate: ptrBool(true),
+				DesiredState:        new("EXITED"),
+				RecreateOnTerminate: new(true),
 			},
 			status:     v1alpha1.PodObservation{PodID: "existing"},
 			statusCode: http.StatusOK,
@@ -800,7 +800,7 @@ func TestCreate(t *testing.T) {
 	})
 
 	t.Run("APINon2xxReturnsError", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 		}))
 		defer server.Close()
@@ -871,7 +871,7 @@ func TestObserveAdoptsIncompleteCreate(t *testing.T) {
 
 	t.Run("NoIncompleteCreateSkipsListCall", func(t *testing.T) {
 		var calls int
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 			calls++
 		}))
 		defer server.Close()
@@ -945,7 +945,7 @@ func TestObserveAdoptsIncompleteCreate(t *testing.T) {
 	})
 
 	t.Run("MultipleMatchesReturnsError", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			_ = json.NewEncoder(w).Encode([]runpodclient.PodResponse{
 				{ID: "pod-a", Name: derivedName, Image: image},
 				{ID: "pod-b", Name: derivedName, Image: image},
@@ -970,7 +970,7 @@ func TestObserveAdoptsIncompleteCreate(t *testing.T) {
 	})
 
 	t.Run("IdentityMismatchReturnsErrorAndDoesNotAdopt", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			_ = json.NewEncoder(w).Encode([]runpodclient.PodResponse{
 				// Same derived name, but a different image: this must never
 				// be silently adopted, even though the name matches exactly.
@@ -1039,7 +1039,7 @@ func TestDelete(t *testing.T) {
 	})
 
 	t.Run("NotFoundTreatsDeleteAsSuccess", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusNotFound)
 		}))
 		defer server.Close()
@@ -1054,7 +1054,7 @@ func TestDelete(t *testing.T) {
 	})
 
 	t.Run("GoneTreatsDeleteAsSuccess", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusGone)
 		}))
 		defer server.Close()
@@ -1071,7 +1071,7 @@ func TestDelete(t *testing.T) {
 	t.Run("ServerErrorReturnsError", func(t *testing.T) {
 		// A failed DELETE must be retried: swallowing it removes the
 		// finalizer while the pod keeps running and billing.
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 		}))
 		defer server.Close()
@@ -1091,7 +1091,7 @@ func TestDelete(t *testing.T) {
 
 	t.Run("InvalidExternalNameReturnsError", func(t *testing.T) {
 		var calls int
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 			calls++
 		}))
 		defer server.Close()
@@ -1110,7 +1110,7 @@ func TestDelete(t *testing.T) {
 
 	t.Run("EmptyExternalNameSkipsHTTPCall", func(t *testing.T) {
 		var calls int
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 			calls++
 		}))
 		defer server.Close()
@@ -1134,7 +1134,7 @@ func TestObserveRecreateOnTerminate(t *testing.T) {
 	newPod := func() *v1alpha1.Pod {
 		p := &v1alpha1.Pod{
 			Spec: v1alpha1.PodSpec{ForProvider: v1alpha1.PodParameters{
-				RecreateOnTerminate: ptrBool(true),
+				RecreateOnTerminate: new(true),
 			}},
 			Status: v1alpha1.PodStatus{AtProvider: v1alpha1.PodObservation{PodID: "existing"}},
 		}
@@ -1262,7 +1262,7 @@ func TestUpdate(t *testing.T) {
 		}))
 		defer server.Close()
 
-		p := newPod(v1alpha1.PodParameters{ImageName: strPtr("img:v2")})
+		p := newPod(v1alpha1.PodParameters{ImageName: new("img:v2")})
 		e := &external{client: newTestClient(t, server), log: logr.Discard()}
 
 		got, err := e.Update(context.Background(), p)
@@ -1301,8 +1301,8 @@ func TestUpdate(t *testing.T) {
 		defer server.Close()
 
 		p := newPod(v1alpha1.PodParameters{
-			ImageName:    strPtr("img:v2"),
-			DesiredState: strPtr("EXITED"),
+			ImageName:    new("img:v2"),
+			DesiredState: new("EXITED"),
 		})
 		e := &external{client: newTestClient(t, server), log: logr.Discard()}
 
@@ -1347,7 +1347,7 @@ func TestUpdate(t *testing.T) {
 
 	t.Run("EmptyExternalNameSkipsHTTPCall", func(t *testing.T) {
 		var calls int
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 			calls++
 		}))
 		defer server.Close()
@@ -1541,7 +1541,3 @@ func newTestClient(t *testing.T, server *httptest.Server) *runpodclient.Client {
 func stubProbe(up bool) func(context.Context, string) bool {
 	return func(context.Context, string) bool { return up }
 }
-
-func ptrBool(b bool) *bool { return &b }
-
-func strPtr(s string) *string { return &s }
