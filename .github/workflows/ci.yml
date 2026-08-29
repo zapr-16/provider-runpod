@@ -97,3 +97,37 @@ jobs:
 
       - name: Build provider binary
         run: go build ./cmd/provider/
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+
+      - name: Install Crossplane CLI
+        # Downloaded directly from the official cli.crossplane.io bucket and
+        # verified against its published sha256 sum, rather than piping the
+        # upstream install.sh through a shell, so a compromised or mutated
+        # release asset cannot inject code into this pipeline.
+        env:
+          CROSSPLANE_CLI_VERSION: v2.5.0
+          CROSSPLANE_CLI_SHA256: 065dd6b40c9ea5fc71e49900d5c924cc0bec7f58375922ddbde6b402f292347e
+        run: |
+          curl -sSL -o crossplane "https://cli.crossplane.io/stable/${CROSSPLANE_CLI_VERSION}/bin/linux_amd64/crossplane"
+          echo "${CROSSPLANE_CLI_SHA256}  crossplane" | sha256sum -c -
+          chmod +x crossplane
+          sudo mv crossplane /usr/local/bin/crossplane
+          crossplane --help >/dev/null
+
+      - name: Build the Crossplane package
+        # Mirrors the release path's `make xpkg-build`: builds the .xpkg from
+        # the committed package/ tree (crds + crossplane.yaml) so CI catches
+        # the same package errors that would otherwise surface at release
+        # time. This does not require the controller image referenced in
+        # crossplane.yaml to exist locally.
+        run: make xpkg-build
