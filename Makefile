@@ -43,7 +43,7 @@ reviewable: generate lint ## Run generation and linting
 # vendored copy at hack/spec/openapi.json, so a spec-update does not change
 # test behavior until someone re-runs `go test` and reviews any new diffs.
 spec-update: ## Re-fetch the vendored RunPod OpenAPI spec
-	curl -sSL -o hack/spec/openapi.json https://rest.runpod.io/v1/openapi.json
+	curl -sSL --proto '=https' --proto-redir '=https' -o hack/spec/openapi.json https://rest.runpod.io/v1/openapi.json
 
 xpkg-build: generate ## Build the Crossplane provider package (.xpkg)
 	rm -f $(XPKG_FILE)

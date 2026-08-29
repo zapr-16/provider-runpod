@@ -118,7 +118,7 @@ jobs:
           CROSSPLANE_CLI_VERSION: v2.5.0
           CROSSPLANE_CLI_SHA256: 065dd6b40c9ea5fc71e49900d5c924cc0bec7f58375922ddbde6b402f292347e
         run: |
-          curl -sSL -o crossplane "https://cli.crossplane.io/stable/${CROSSPLANE_CLI_VERSION}/bin/linux_amd64/crossplane"
+          curl -sSL --proto '=https' --proto-redir '=https' -o crossplane "https://cli.crossplane.io/stable/${CROSSPLANE_CLI_VERSION}/bin/linux_amd64/crossplane"
           echo "${CROSSPLANE_CLI_SHA256}  crossplane" | sha256sum -c -
           chmod +x crossplane
           sudo mv crossplane /usr/local/bin/crossplane
