@@ -8,10 +8,11 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
-	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
 	managed "github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -56,20 +57,20 @@ func templateResponse() *runpodclient.TemplateResponse {
 func matchingSpec() v1alpha1.EndpointParameters {
 	scaler := v1alpha1.ScalerTypeQueueDelay
 	return v1alpha1.EndpointParameters{
-		ImageName:               ptrString("runpod/worker-v1-vllm:stable"),
+		ImageName:               new("runpod/worker-v1-vllm:stable"),
 		Env:                     []v1alpha1.EnvVar{{Name: "MODEL_NAME", Value: "Qwen/Qwen2.5-Coder-7B-Instruct"}},
-		ContainerDiskInGb:       ptrInt32(30),
+		ContainerDiskInGb:       new(int32(30)),
 		GPUTypeIDs:              []string{"NVIDIA GeForce RTX 3090"},
-		GPUCount:                ptrInt32(1),
-		WorkersMin:              ptrInt32(0),
-		WorkersMax:              ptrInt32(2),
-		IdleTimeout:             ptrInt32(60),
-		FlashBoot:               ptrBool(true),
+		GPUCount:                new(int32(1)),
+		WorkersMin:              new(int32(0)),
+		WorkersMax:              new(int32(2)),
+		IdleTimeout:             new(int32(60)),
+		FlashBoot:               new(true),
 		ScalerType:              &scaler,
-		ScalerValue:             ptrInt32(4),
+		ScalerValue:             new(int32(4)),
 		DockerStartCmd:          []string{"python", "run.py"},
 		DockerEntrypoint:        []string{"/bin/sh"},
-		ContainerRegistryAuthID: ptrString("auth-1"),
+		ContainerRegistryAuthID: new("auth-1"),
 	}
 }
 
@@ -199,7 +200,7 @@ func TestObserve(t *testing.T) {
 			externalName: "ep-123",
 			spec: func() v1alpha1.EndpointParameters {
 				s := matchingSpec()
-				s.WorkersMax = ptrInt32(5)
+				s.WorkersMax = new(int32(5))
 				return s
 			},
 			statusCode: http.StatusOK,
@@ -222,7 +223,7 @@ func TestObserve(t *testing.T) {
 			externalName: "ep-123",
 			spec: func() v1alpha1.EndpointParameters {
 				s := matchingSpec()
-				s.ImageName = ptrString("runpod/worker-v1-vllm:dev")
+				s.ImageName = new("runpod/worker-v1-vllm:dev")
 				return s
 			},
 			statusCode: http.StatusOK,
@@ -244,7 +245,7 @@ func TestObserve(t *testing.T) {
 		"NilOptionalFieldsDoNotDrift": {
 			externalName: "ep-123",
 			spec: func() v1alpha1.EndpointParameters {
-				return v1alpha1.EndpointParameters{ImageName: ptrString("runpod/worker-v1-vllm:stable")}
+				return v1alpha1.EndpointParameters{ImageName: new("runpod/worker-v1-vllm:stable")}
 			},
 			statusCode: http.StatusOK,
 			response:   readyResponse(),
@@ -267,7 +268,7 @@ func TestObserve(t *testing.T) {
 		"TemplateModeMatchingTemplateIDIsUpToDate": {
 			externalName: "ep-123",
 			spec: func() v1alpha1.EndpointParameters {
-				return v1alpha1.EndpointParameters{TemplateID: ptrString("tpl-xyz")}
+				return v1alpha1.EndpointParameters{TemplateID: new("tpl-xyz")}
 			},
 			statusCode: http.StatusOK,
 			response:   readyResponse(),
@@ -288,7 +289,7 @@ func TestObserve(t *testing.T) {
 		"TemplateModeMismatchedTemplateIDIsNotUpToDate": {
 			externalName: "ep-123",
 			spec: func() v1alpha1.EndpointParameters {
-				return v1alpha1.EndpointParameters{TemplateID: ptrString("tpl-new")}
+				return v1alpha1.EndpointParameters{TemplateID: new("tpl-new")}
 			},
 			statusCode: http.StatusOK,
 			response: func() *runpodclient.EndpointResponse {
@@ -441,15 +442,15 @@ func TestCreate(t *testing.T) {
 		defer server.Close()
 
 		spec := matchingSpec()
-		spec.ComputeType = ptrString("CPU")
-		spec.VCPUCount = ptrInt32(4)
+		spec.ComputeType = new("CPU")
+		spec.VCPUCount = new(int32(4))
 		spec.CPUFlavorIDs = []string{"cpu3c"}
 		spec.AllowedCudaVersions = []string{"12.1"}
-		spec.MinCudaVersion = ptrString("11.8")
+		spec.MinCudaVersion = new("11.8")
 		spec.NetworkVolumeIDs = []string{"nv-1", "nv-2"}
 		spec.DockerStartCmd = []string{"python", "run.py"}
 		spec.DockerEntrypoint = []string{"/bin/sh"}
-		spec.ContainerRegistryAuthID = ptrString("auth-1")
+		spec.ContainerRegistryAuthID = new("auth-1")
 
 		ep := &v1alpha1.Endpoint{
 			ObjectMeta: metav1.ObjectMeta{Name: "vllm-small"},
@@ -533,14 +534,14 @@ func TestCreate(t *testing.T) {
 	})
 
 	t.Run("TemplateCreateFailureReturnsError", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 		}))
 		defer server.Close()
 
 		e := &external{client: newTestClient(t, server), log: logr.Discard()}
 		_, err := e.Create(context.Background(), &v1alpha1.Endpoint{
-			Spec: v1alpha1.EndpointSpec{ForProvider: v1alpha1.EndpointParameters{ImageName: ptrString("runpod/worker-v1-vllm:stable")}},
+			Spec: v1alpha1.EndpointSpec{ForProvider: v1alpha1.EndpointParameters{ImageName: new("runpod/worker-v1-vllm:stable")}},
 		})
 		if err == nil {
 			t.Fatal("Create() error = nil, want non-nil")
@@ -570,7 +571,7 @@ func TestCreate(t *testing.T) {
 		e := &external{client: newTestClient(t, server), log: logr.Discard()}
 		_, err := e.Create(context.Background(), &v1alpha1.Endpoint{
 			ObjectMeta: metav1.ObjectMeta{Name: "x"},
-			Spec:       v1alpha1.EndpointSpec{ForProvider: v1alpha1.EndpointParameters{ImageName: ptrString("runpod/worker-v1-vllm:stable")}},
+			Spec:       v1alpha1.EndpointSpec{ForProvider: v1alpha1.EndpointParameters{ImageName: new("runpod/worker-v1-vllm:stable")}},
 		})
 		if err == nil {
 			t.Fatal("Create() error = nil, want non-nil")
@@ -602,9 +603,9 @@ func TestCreate(t *testing.T) {
 		defer server.Close()
 
 		spec := v1alpha1.EndpointParameters{
-			TemplateID: ptrString("tpl-ext"),
-			WorkersMin: ptrInt32(0),
-			WorkersMax: ptrInt32(2),
+			TemplateID: new("tpl-ext"),
+			WorkersMin: new(int32(0)),
+			WorkersMax: new(int32(2)),
 		}
 		ep := &v1alpha1.Endpoint{
 			ObjectMeta: metav1.ObjectMeta{Name: "vllm-from-template"},
@@ -631,6 +632,198 @@ func TestCreate(t *testing.T) {
 			t.Fatal("Create() connection details missing endpointId")
 		}
 	})
+
+	t.Run("SendsNameWithUIDSuffixForDeterministicRecovery", func(t *testing.T) {
+		var gotEndpoint runpodclient.CreateEndpointRequest
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodPost && r.URL.Path == "/endpoints" {
+				_ = json.NewDecoder(r.Body).Decode(&gotEndpoint)
+				_ = json.NewEncoder(w).Encode(map[string]string{"id": "ep-created"})
+				return
+			}
+			t.Fatalf("unexpected request: %q %q", r.Method, r.URL.Path)
+		}))
+		defer server.Close()
+
+		ep := &v1alpha1.Endpoint{
+			ObjectMeta: metav1.ObjectMeta{Name: "vllm-from-template", UID: "550e8400-e29b-41d4-a716-446655440000"},
+			Spec: v1alpha1.EndpointSpec{ForProvider: v1alpha1.EndpointParameters{
+				TemplateID: new("tpl-ext"),
+			}},
+		}
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+		if _, err := e.Create(context.Background(), ep); err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+
+		want := "vllm-from-template-550e8400"
+		if gotEndpoint.Name == nil || *gotEndpoint.Name != want {
+			t.Fatalf("Create() endpoint name = %#v, want %q", gotEndpoint.Name, want)
+		}
+	})
+}
+
+// TestObserveAdoptsIncompleteCreate covers Observe()'s ambiguous-create
+// recovery: an empty external-name annotation combined with
+// meta.ExternalCreateIncomplete means a prior Create's result was never
+// confirmed, so Observe must list endpoints and match on the deterministic
+// create name instead of blindly reporting the resource missing (which
+// would let the reconciler retry Create and orphan an already-billing
+// endpoint).
+func TestObserveAdoptsIncompleteCreate(t *testing.T) {
+	newEndpoint := func() *v1alpha1.Endpoint {
+		return &v1alpha1.Endpoint{
+			ObjectMeta: metav1.ObjectMeta{Name: "vllm-small", UID: "550e8400-e29b-41d4-a716-446655440000"},
+			Spec:       v1alpha1.EndpointSpec{ForProvider: v1alpha1.EndpointParameters{TemplateID: new("tpl-xyz")}},
+		}
+	}
+	markIncomplete := func(ep *v1alpha1.Endpoint) {
+		meta.SetExternalCreatePending(ep, time.Now())
+	}
+	derivedName := "vllm-small-550e8400"
+
+	t.Run("NoIncompleteCreateSkipsListCall", func(t *testing.T) {
+		var calls int
+		server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+			calls++
+		}))
+		defer server.Close()
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+		got, err := e.Observe(context.Background(), newEndpoint())
+		if err != nil {
+			t.Fatalf("Observe() error = %v", err)
+		}
+		if got.ResourceExists {
+			t.Fatal("Observe() ResourceExists = true, want false")
+		}
+		if calls != 0 {
+			t.Fatalf("Observe() made %d HTTP calls, want 0 (happy path never lists)", calls)
+		}
+	})
+
+	t.Run("ZeroMatchesReportsNotExists", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/endpoints" {
+				t.Fatalf("unexpected path: %s", r.URL.Path)
+			}
+			_, _ = w.Write([]byte(`[{"id":"ep-other","name":"unrelated"}]`))
+		}))
+		defer server.Close()
+
+		ep := newEndpoint()
+		markIncomplete(ep)
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+		got, err := e.Observe(context.Background(), ep)
+		if err != nil {
+			t.Fatalf("Observe() error = %v", err)
+		}
+		if got.ResourceExists {
+			t.Fatal("Observe() ResourceExists = true, want false")
+		}
+		if meta.GetExternalName(ep) != "" {
+			t.Fatalf("Observe() external-name = %q, want empty", meta.GetExternalName(ep))
+		}
+	})
+
+	t.Run("SingleMatchAdoptsAndLateInitializes", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/endpoints" {
+				t.Fatalf("unexpected path: %s", r.URL.Path)
+			}
+			_ = json.NewEncoder(w).Encode([]runpodclient.EndpointResponse{
+				{ID: "ep-recovered", Name: derivedName, TemplateID: "tpl-xyz"},
+			})
+		}))
+		defer server.Close()
+
+		ep := newEndpoint()
+		markIncomplete(ep)
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+		got, err := e.Observe(context.Background(), ep)
+		if err != nil {
+			t.Fatalf("Observe() error = %v", err)
+		}
+		if !got.ResourceExists {
+			t.Fatal("Observe() ResourceExists = false, want true")
+		}
+		if !got.ResourceLateInitialized {
+			t.Fatal("Observe() ResourceLateInitialized = false, want true (must persist the adopted external-name)")
+		}
+		if meta.GetExternalName(ep) != "ep-recovered" {
+			t.Fatalf("Observe() external-name = %q, want %q", meta.GetExternalName(ep), "ep-recovered")
+		}
+	})
+
+	t.Run("MultipleMatchesReturnsError", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_ = json.NewEncoder(w).Encode([]runpodclient.EndpointResponse{
+				{ID: "ep-a", Name: derivedName, TemplateID: "tpl-xyz"},
+				{ID: "ep-b", Name: derivedName, TemplateID: "tpl-xyz"},
+			})
+		}))
+		defer server.Close()
+
+		ep := newEndpoint()
+		markIncomplete(ep)
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+		_, err := e.Observe(context.Background(), ep)
+		if err == nil {
+			t.Fatal("Observe() error = nil, want non-nil")
+		}
+		if !strings.Contains(err.Error(), errAmbiguousCreate) {
+			t.Fatalf("Observe() error = %q, want it to mention %q", err.Error(), errAmbiguousCreate)
+		}
+		if meta.GetExternalName(ep) != "" {
+			t.Fatalf("Observe() external-name = %q, want empty (must not guess)", meta.GetExternalName(ep))
+		}
+	})
+
+	t.Run("IdentityMismatchReturnsErrorAndDoesNotAdopt", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_ = json.NewEncoder(w).Encode([]runpodclient.EndpointResponse{
+				// Same derived name, but a different template: this must
+				// never be silently adopted, even though the name matches
+				// exactly.
+				{ID: "ep-wrong-template", Name: derivedName, TemplateID: "tpl-other"},
+			})
+		}))
+		defer server.Close()
+
+		ep := newEndpoint()
+		markIncomplete(ep)
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+		_, err := e.Observe(context.Background(), ep)
+		if err == nil {
+			t.Fatal("Observe() error = nil, want non-nil")
+		}
+		if !strings.Contains(err.Error(), errAmbiguousCreate) {
+			t.Fatalf("Observe() error = %q, want it to mention %q", err.Error(), errAmbiguousCreate)
+		}
+		if meta.GetExternalName(ep) != "" {
+			t.Fatalf("Observe() external-name = %q, want empty (must not adopt on identity mismatch)", meta.GetExternalName(ep))
+		}
+	})
+}
+
+// TestHasEndpointDriftIgnoresDerivedNameSuffix confirms that the
+// deterministic -uid8 suffix appended to the name sent on create never
+// surfaces as drift: hasEndpointDrift never compares against an endpoint's
+// name in the first place, so the response's name is free to include the
+// suffix (or anything else) without affecting up-to-date evaluation.
+func TestHasEndpointDriftIgnoresDerivedNameSuffix(t *testing.T) {
+	spec := matchingSpec()
+	response := readyResponse()
+	response.Name = "vllm-small-550e8400"
+
+	if hasEndpointDrift(spec, response) {
+		t.Fatal("hasEndpointDrift() = true, want false: the derived-name suffix must never be reported as drift")
+	}
 }
 
 func TestUpdate(t *testing.T) {
@@ -673,14 +866,14 @@ func TestUpdate(t *testing.T) {
 		defer server.Close()
 
 		spec := matchingSpec()
-		spec.VCPUCount = ptrInt32(4)
+		spec.VCPUCount = new(int32(4))
 		spec.CPUFlavorIDs = []string{"cpu3c"}
 		spec.AllowedCudaVersions = []string{"12.1"}
-		spec.MinCudaVersion = ptrString("11.8")
+		spec.MinCudaVersion = new("11.8")
 		spec.NetworkVolumeIDs = []string{"nv-1", "nv-2"}
 		spec.DockerStartCmd = []string{"python", "run.py"}
 		spec.DockerEntrypoint = []string{"/bin/sh"}
-		spec.ContainerRegistryAuthID = ptrString("auth-1")
+		spec.ContainerRegistryAuthID = new("auth-1")
 
 		ep := &v1alpha1.Endpoint{
 			ObjectMeta: metav1.ObjectMeta{Name: "vllm-small"},
@@ -879,7 +1072,7 @@ func TestUpdate(t *testing.T) {
 		defer server.Close()
 
 		spec := matchingSpec()
-		spec.RecycleWorkersOnTemplateChange = ptrBool(false)
+		spec.RecycleWorkersOnTemplateChange = new(false)
 
 		ep := &v1alpha1.Endpoint{
 			ObjectMeta: metav1.ObjectMeta{Name: "vllm-small"},
@@ -1042,8 +1235,8 @@ func TestUpdate(t *testing.T) {
 		defer server.Close()
 
 		spec := v1alpha1.EndpointParameters{
-			TemplateID: ptrString("tpl-ext"),
-			WorkersMax: ptrInt32(2),
+			TemplateID: new("tpl-ext"),
+			WorkersMax: new(int32(2)),
 		}
 		ep := &v1alpha1.Endpoint{
 			ObjectMeta: metav1.ObjectMeta{Name: "vllm-from-template"},
@@ -1070,7 +1263,7 @@ func TestUpdate(t *testing.T) {
 
 	t.Run("InvalidExternalNameReturnsError", func(t *testing.T) {
 		var calls int
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 			calls++
 		}))
 		defer server.Close()
@@ -1088,7 +1281,7 @@ func TestUpdate(t *testing.T) {
 	})
 
 	t.Run("EndpointPatchFailureReturnsError", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusBadRequest)
 		}))
 		defer server.Close()
@@ -1162,7 +1355,7 @@ func TestDelete(t *testing.T) {
 
 	t.Run("EmptyExternalNameSkipsHTTPCalls", func(t *testing.T) {
 		var calls int
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 			calls++
 		}))
 		defer server.Close()
@@ -1177,7 +1370,7 @@ func TestDelete(t *testing.T) {
 	})
 
 	t.Run("NotFoundDeleteIsSuccess", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusNotFound)
 		}))
 		defer server.Close()
@@ -1198,7 +1391,7 @@ func TestDelete(t *testing.T) {
 	t.Run("EndpointDeleteServerErrorReturnsError", func(t *testing.T) {
 		// A failed endpoint DELETE must be retried, not swallowed — the
 		// endpoint would keep running and billing with the CR gone.
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 		}))
 		defer server.Close()
@@ -1247,7 +1440,7 @@ func TestDelete(t *testing.T) {
 
 	t.Run("InvalidExternalNameReturnsError", func(t *testing.T) {
 		var calls int
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 			calls++
 		}))
 		defer server.Close()
@@ -1280,7 +1473,7 @@ func TestDelete(t *testing.T) {
 
 		ep := &v1alpha1.Endpoint{
 			Spec: v1alpha1.EndpointSpec{
-				ForProvider: v1alpha1.EndpointParameters{TemplateID: ptrString("tpl-ext")},
+				ForProvider: v1alpha1.EndpointParameters{TemplateID: new("tpl-ext")},
 			},
 			Status: v1alpha1.EndpointStatus{
 				AtProvider: v1alpha1.EndpointObservation{TemplateID: "tpl-ext"},
@@ -1309,11 +1502,11 @@ func TestHasEndpointDrift(t *testing.T) {
 			want:   false,
 		},
 		"WorkersMinDrifts": {
-			mutate: func(s *v1alpha1.EndpointParameters) { s.WorkersMin = ptrInt32(1) },
+			mutate: func(s *v1alpha1.EndpointParameters) { s.WorkersMin = new(int32(1)) },
 			want:   true,
 		},
 		"IdleTimeoutDrifts": {
-			mutate: func(s *v1alpha1.EndpointParameters) { s.IdleTimeout = ptrInt32(120) },
+			mutate: func(s *v1alpha1.EndpointParameters) { s.IdleTimeout = new(int32(120)) },
 			want:   true,
 		},
 		"ScalerTypeDrifts": {
@@ -1343,11 +1536,11 @@ func TestHasEndpointDrift(t *testing.T) {
 		},
 		"ComputeTypeDoesNotDrift": {
 			// Write-only: the observation never echoes computeType.
-			mutate: func(s *v1alpha1.EndpointParameters) { s.ComputeType = ptrString("CPU") },
+			mutate: func(s *v1alpha1.EndpointParameters) { s.ComputeType = new("CPU") },
 			want:   false,
 		},
 		"VCPUCountDoesNotDrift": {
-			mutate: func(s *v1alpha1.EndpointParameters) { s.VCPUCount = ptrInt32(4) },
+			mutate: func(s *v1alpha1.EndpointParameters) { s.VCPUCount = new(int32(4)) },
 			want:   false,
 		},
 		"CPUFlavorIDsDoNotDrift": {
@@ -1359,7 +1552,7 @@ func TestHasEndpointDrift(t *testing.T) {
 			want:   false,
 		},
 		"MinCudaVersionDoesNotDrift": {
-			mutate: func(s *v1alpha1.EndpointParameters) { s.MinCudaVersion = ptrString("11.8") },
+			mutate: func(s *v1alpha1.EndpointParameters) { s.MinCudaVersion = new("11.8") },
 			want:   false,
 		},
 		"NetworkVolumeIDsDoNotDrift": {
@@ -1389,7 +1582,7 @@ func TestHasTemplateDrift(t *testing.T) {
 			want:   false,
 		},
 		"ImageDrifts": {
-			mutate: func(s *v1alpha1.EndpointParameters) { s.ImageName = ptrString("other:latest") },
+			mutate: func(s *v1alpha1.EndpointParameters) { s.ImageName = new("other:latest") },
 			want:   true,
 		},
 		"EnvDrifts": {
@@ -1399,7 +1592,7 @@ func TestHasTemplateDrift(t *testing.T) {
 			want: true,
 		},
 		"ContainerDiskDrifts": {
-			mutate: func(s *v1alpha1.EndpointParameters) { s.ContainerDiskInGb = ptrInt32(50) },
+			mutate: func(s *v1alpha1.EndpointParameters) { s.ContainerDiskInGb = new(int32(50)) },
 			want:   true,
 		},
 		"NilEnvAndDiskDoNotDrift": {
@@ -1423,7 +1616,7 @@ func TestHasTemplateDrift(t *testing.T) {
 			want:   true,
 		},
 		"ContainerRegistryAuthIDDrifts": {
-			mutate: func(s *v1alpha1.EndpointParameters) { s.ContainerRegistryAuthID = ptrString("other-auth") },
+			mutate: func(s *v1alpha1.EndpointParameters) { s.ContainerRegistryAuthID = new("other-auth") },
 			want:   true,
 		},
 		"NilDockerAndAuthFieldsDoNotDrift": {
@@ -1455,9 +1648,3 @@ func newTestClient(t *testing.T, server *httptest.Server) *runpodclient.Client {
 		runpodclient.WithHTTPClient(server.Client()),
 	)
 }
-
-func ptrInt32(v int32) *int32 { return &v }
-
-func ptrBool(b bool) *bool { return &b }
-
-func ptrString(s string) *string { return &s }

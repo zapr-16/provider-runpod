@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,16 +20,19 @@ import (
 
 	v1alpha1 "github.com/zapr-16/provider-runpod/apis/v1alpha1"
 	runpodclient "github.com/zapr-16/provider-runpod/internal/clients"
+	"github.com/zapr-16/provider-runpod/internal/controller/fieldcmp"
 )
 
 const (
-	errGetPod         = "cannot get pod from RunPod API"
-	errParseStartedAt = "cannot parse pod lastStartedAt timestamp"
-	errCreatePod      = "cannot create pod via RunPod API"
-	errDeletePod      = "cannot delete pod via RunPod API"
-	errUpdatePod      = "cannot update pod via RunPod API"
-	errStartPod       = "cannot start pod via RunPod API"
-	errStopPod        = "cannot stop pod via RunPod API"
+	errGetPod          = "cannot get pod from RunPod API"
+	errParseStartedAt  = "cannot parse pod lastStartedAt timestamp"
+	errCreatePod       = "cannot create pod via RunPod API"
+	errDeletePod       = "cannot delete pod via RunPod API"
+	errUpdatePod       = "cannot update pod via RunPod API"
+	errStartPod        = "cannot start pod via RunPod API"
+	errStopPod         = "cannot stop pod via RunPod API"
+	errListPods        = "cannot list pods from RunPod API"
+	errAmbiguousCreate = "cannot recover from an ambiguous pod create"
 
 	// logKeyExternalName is the structured-logging key used to annotate log
 	// lines with the RunPod external-name (pod ID).
@@ -76,7 +80,15 @@ func (e *external) Observe(ctx context.Context, mg xpresource.Managed) (managed.
 
 	externalName := meta.GetExternalName(pod)
 	if externalName == "" {
-		return managed.ExternalObservation{ResourceExists: false}, nil
+		if !meta.ExternalCreateIncomplete(pod) {
+			return managed.ExternalObservation{ResourceExists: false}, nil
+		}
+		// The managed reconciler refuses to call Create again while a prior
+		// create's outcome is unknown, unless the external name is
+		// deterministic (see managed.WithDeterministicExternalName, wired in
+		// this controller's Setup). Since it is, recover instead of leaving
+		// the resource stuck.
+		return e.adoptIncompleteCreate(ctx, pod)
 	}
 
 	response, found, err := e.client.GetPod(ctx, externalName)
@@ -88,6 +100,80 @@ func (e *external) Observe(ctx context.Context, mg xpresource.Managed) (managed.
 		return managed.ExternalObservation{ResourceExists: false}, nil
 	}
 
+	return e.observeResponse(ctx, pod, response, false)
+}
+
+// adoptIncompleteCreate handles Observe() when the external-name annotation
+// is empty and the last recorded create attempt never confirmed success
+// (meta.ExternalCreateIncomplete): the process may have crashed between the
+// RunPod POST and persisting the external name, so a plain retry could
+// orphan a pod that is already running and billing. Because Create() sends
+// a deterministic name (fieldcmp.DerivedName), listing pods and matching on
+// that exact name recovers the situation without guessing: at most one pod
+// should ever carry it.
+func (e *external) adoptIncompleteCreate(ctx context.Context, pod *v1alpha1.Pod) (managed.ExternalObservation, error) {
+	derivedName := fieldcmp.DerivedName(pod.GetName(), string(pod.GetUID()))
+
+	pods, err := e.client.ListPods(ctx)
+	if err != nil {
+		return managed.ExternalObservation{}, errors.Wrap(err, errListPods)
+	}
+
+	var match *runpodclient.PodResponse
+	for i := range pods {
+		if pods[i].Name != derivedName {
+			continue
+		}
+		if match != nil {
+			return managed.ExternalObservation{}, errors.Errorf("%s: name %q matches more than one pod (at least %q and %q)", errAmbiguousCreate, derivedName, match.ID, pods[i].ID)
+		}
+		match = &pods[i]
+	}
+
+	if match == nil {
+		// Nothing was ever created under this name (or RunPod never received
+		// the request): a fresh Create is safe.
+		return managed.ExternalObservation{ResourceExists: false}, nil
+	}
+
+	if !podIdentityMatches(pod.Spec.ForProvider, match) {
+		return managed.ExternalObservation{}, errors.Errorf("%s: pod %q has name %q but its image/GPU selection does not match spec.forProvider", errAmbiguousCreate, match.ID, derivedName)
+	}
+
+	e.log.Info("Recovered external-name for pod after an ambiguous create", logKeyExternalName, match.ID, "derived-name", derivedName)
+	meta.SetExternalName(pod, match.ID)
+
+	// ResourceLateInitialized here persists only the external-name
+	// annotation recovered above; it is not spec late-init. This provider's
+	// no-spec-late-init policy (see the comment at the end of
+	// observeResponse) is unaffected.
+	obs, err := e.observeResponse(ctx, pod, match, true)
+	return obs, err
+}
+
+// podIdentityMatches reports whether r plausibly is the pod spec describes,
+// used only to guard adoption after an ambiguous create: a name match alone
+// is not proof, since a name collision (however unlikely with the uid8
+// suffix) must never cause the wrong billed resource to be adopted.
+func podIdentityMatches(spec v1alpha1.PodParameters, r *runpodclient.PodResponse) bool {
+	if spec.ImageName != nil && *spec.ImageName != r.Image {
+		return false
+	}
+	if len(spec.GPUTypeIDs) > 0 && r.Machine.GPUTypeID != "" && !slices.Contains(spec.GPUTypeIDs, r.Machine.GPUTypeID) {
+		return false
+	}
+	if len(spec.CPUFlavorIDs) > 0 && r.CPUFlavorID != "" && !slices.Contains(spec.CPUFlavorIDs, r.CPUFlavorID) {
+		return false
+	}
+	return true
+}
+
+// observeResponse populates pod's observation and conditions from a fetched
+// or adopted RunPod response and returns the resulting ExternalObservation.
+// lateInit is true only when called from adoptIncompleteCreate, to persist
+// the external-name annotation recovered there.
+func (e *external) observeResponse(ctx context.Context, pod *v1alpha1.Pod, response *runpodclient.PodResponse, lateInit bool) (managed.ExternalObservation, error) {
+	externalName := response.ID
 	endpoint, resolvedPort := resolveConnectionTarget(pod.Spec.ForProvider.Ports, response.ID, response.PublicIP, response.PortMappings)
 	networkingReady := endpoint != "" || (response.PublicIP != "" && response.PortMappings != nil)
 	if endpoint != "" && response.DesiredStatus == "RUNNING" && e.probeHTTP != nil {
@@ -180,14 +266,17 @@ func (e *external) Observe(ctx context.Context, mg xpresource.Managed) (managed.
 		connectionDetails[xpv2.CredentialsSecretPortKey] = []byte(resolvedPort)
 	}
 
-	// Never report ResourceLateInitialized: this provider does not
-	// late-initialize spec fields, and reporting it makes the reconciler
-	// issue a spec update that resets pending status changes — atProvider
-	// would never persist.
+	// lateInit is only ever true when this call came from
+	// adoptIncompleteCreate, to persist the external-name annotation it just
+	// recovered. Otherwise this provider never reports
+	// ResourceLateInitialized: it does not late-initialize spec fields, and
+	// reporting it would make the reconciler issue a spec update that resets
+	// pending status changes — atProvider would never persist.
 	return managed.ExternalObservation{
-		ResourceExists:    true,
-		ResourceUpToDate:  upToDate,
-		ConnectionDetails: connectionDetails,
+		ResourceExists:          true,
+		ResourceUpToDate:        upToDate,
+		ResourceLateInitialized: lateInit,
+		ConnectionDetails:       connectionDetails,
 	}, nil
 }
 
@@ -198,33 +287,38 @@ func (e *external) Create(ctx context.Context, mg xpresource.Managed) (managed.E
 	}
 
 	spec := pod.Spec.ForProvider
-	name := pod.GetName()
+	// A deterministic name (base name plus a fragment of the resource UID)
+	// lets Observe() recover this pod by listing and matching on it if the
+	// controller crashes between this Create call and persisting the
+	// external-name annotation, instead of leaking a billed GPU or refusing
+	// to proceed forever. See fieldcmp.DerivedName.
+	name := fieldcmp.DerivedName(pod.GetName(), string(pod.GetUID()))
 	req := runpodclient.CreatePodRequest{
 		Name:                    &name,
 		ImageName:               spec.ImageName,
-		GPUTypeIDs:              cloneStrings(spec.GPUTypeIDs),
+		GPUTypeIDs:              fieldcmp.CloneStrings(spec.GPUTypeIDs),
 		GPUCount:                spec.GPUCount,
 		SupportPublicIP:         spec.SupportPublicIP,
 		ContainerDiskInGb:       spec.ContainerDiskInGb,
 		VolumeInGb:              spec.VolumeInGb,
 		VolumeMountPath:         spec.VolumeMountPath,
-		Env:                     buildEnvMap(spec.Env),
+		Env:                     fieldcmp.BuildEnvMap(spec.Env),
 		Ports:                   buildPortTokens(spec.Ports),
-		DockerStartCmd:          cloneStrings(spec.DockerStartCmd),
-		DockerEntrypoint:        cloneStrings(spec.DockerEntrypoint),
+		DockerStartCmd:          fieldcmp.CloneStrings(spec.DockerStartCmd),
+		DockerEntrypoint:        fieldcmp.CloneStrings(spec.DockerEntrypoint),
 		ComputeType:             spec.ComputeType,
 		VCPUCount:               spec.VCPUCount,
-		CPUFlavorIDs:            cloneStrings(spec.CPUFlavorIDs),
+		CPUFlavorIDs:            fieldcmp.CloneStrings(spec.CPUFlavorIDs),
 		CPUFlavorPriority:       spec.CPUFlavorPriority,
-		DataCenterIDs:           cloneStrings(spec.DataCenterIDs),
+		DataCenterIDs:           fieldcmp.CloneStrings(spec.DataCenterIDs),
 		DataCenterPriority:      spec.DataCenterPriority,
 		GPUTypePriority:         spec.GPUTypePriority,
-		CountryCodes:            cloneStrings(spec.CountryCodes),
+		CountryCodes:            fieldcmp.CloneStrings(spec.CountryCodes),
 		Interruptible:           spec.Interruptible,
 		Locked:                  spec.Locked,
 		GlobalNetworking:        spec.GlobalNetworking,
 		VolumeEncrypted:         spec.VolumeEncrypted,
-		AllowedCudaVersions:     cloneStrings(spec.AllowedCudaVersions),
+		AllowedCudaVersions:     fieldcmp.CloneStrings(spec.AllowedCudaVersions),
 		MinRAMPerGPU:            spec.MinRAMPerGPU,
 		MinVCPUPerGPU:           spec.MinVCPUPerGPU,
 		MinDiskBandwidthMBps:    spec.MinDiskBandwidthMBps,
@@ -278,10 +372,10 @@ func (e *external) Update(ctx context.Context, mg xpresource.Managed) (managed.E
 			ContainerDiskInGb:       spec.ContainerDiskInGb,
 			VolumeInGb:              spec.VolumeInGb,
 			VolumeMountPath:         spec.VolumeMountPath,
-			Env:                     buildEnvMap(spec.Env),
+			Env:                     fieldcmp.BuildEnvMap(spec.Env),
 			Ports:                   buildPortTokens(spec.Ports),
-			DockerStartCmd:          cloneStrings(spec.DockerStartCmd),
-			DockerEntrypoint:        cloneStrings(spec.DockerEntrypoint),
+			DockerStartCmd:          fieldcmp.CloneStrings(spec.DockerStartCmd),
+			DockerEntrypoint:        fieldcmp.CloneStrings(spec.DockerEntrypoint),
 			Locked:                  spec.Locked,
 			GlobalNetworking:        spec.GlobalNetworking,
 			ContainerRegistryAuthID: spec.ContainerRegistryAuthID,
@@ -340,7 +434,7 @@ func hasEnvDrift(desired []v1alpha1.EnvVar, observed map[string]string) bool {
 		want[env.Name] = env.Value
 	}
 
-	return !stringMapsEqual(want, observed)
+	return !fieldcmp.StringMapsEqual(want, observed)
 }
 
 // hasPortsDrift reports whether declared ports diverge from the running
@@ -472,10 +566,10 @@ func hasMutableDrift(spec v1alpha1.PodParameters, r *runpodclient.PodResponse) b
 	if spec.ContainerRegistryAuthID != nil && *spec.ContainerRegistryAuthID != r.ContainerRegistryAuthID {
 		return true
 	}
-	if len(spec.DockerStartCmd) > 0 && !stringSlicesEqual(spec.DockerStartCmd, r.DockerStartCmd) {
+	if len(spec.DockerStartCmd) > 0 && !fieldcmp.StringSlicesEqual(spec.DockerStartCmd, r.DockerStartCmd) {
 		return true
 	}
-	if len(spec.DockerEntrypoint) > 0 && !stringSlicesEqual(spec.DockerEntrypoint, r.DockerEntrypoint) {
+	if len(spec.DockerEntrypoint) > 0 && !fieldcmp.StringSlicesEqual(spec.DockerEntrypoint, r.DockerEntrypoint) {
 		return true
 	}
 	// globalNetworking is write-only (never echoed) and excluded, like
@@ -516,30 +610,6 @@ func hasLifecycleDrift(spec v1alpha1.PodParameters, observedStatus string) bool 
 	return desiredStateOrDefault(spec) != observedStatus
 }
 
-func stringSlicesEqual(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func stringMapsEqual(a, b map[string]string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for k, av := range a {
-		if bv, ok := b[k]; !ok || bv != av {
-			return false
-		}
-	}
-	return true
-}
-
 func stringSetEqual(a, b map[string]struct{}) bool {
 	if len(a) != len(b) {
 		return false
@@ -568,18 +638,6 @@ func clonePortMappings(in map[string]int32) map[string]int32 {
 	return out
 }
 
-func buildEnvMap(in []v1alpha1.EnvVar) map[string]string {
-	if len(in) == 0 {
-		return nil
-	}
-
-	out := make(map[string]string, len(in))
-	for _, env := range in {
-		out[env.Name] = env.Value
-	}
-	return out
-}
-
 func buildPortTokens(in []v1alpha1.Port) []string {
 	if len(in) == 0 {
 		return nil
@@ -589,14 +647,5 @@ func buildPortTokens(in []v1alpha1.Port) []string {
 	for _, port := range in {
 		out = append(out, normalizePortToken(port.Number, port.Protocol))
 	}
-	return out
-}
-
-func cloneStrings(in []string) []string {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]string, len(in))
-	copy(out, in)
 	return out
 }

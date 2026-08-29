@@ -1,3 +1,6 @@
+// Package providerconfig reconciles the ProviderConfig, ClusterProviderConfig,
+// and ProviderConfigUsage resources that supply RunPod API credentials to the
+// other controllers.
 package providerconfig
 
 import (
@@ -19,8 +22,8 @@ import (
 
 const (
 	errGetProviderConfig  = "cannot get ProviderConfig"
-	errReadCredentials    = "cannot read ProviderConfig credentials"
-	errInvalidCredentials = "RunPod API rejected ProviderConfig credentials"
+	errReadCredentials    = "cannot read ProviderConfig credentials"         //nolint:gosec // error message text, not a credential value
+	errInvalidCredentials = "RunPod API rejected ProviderConfig credentials" //nolint:gosec // error message text, not a credential value
 	errUpdateStatus       = "cannot update ProviderConfig status"
 
 	// requeueInterval re-validates credentials periodically: the referenced

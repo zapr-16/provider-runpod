@@ -276,7 +276,12 @@ type PodStatus struct {
 	AtProvider                 PodObservation `json:"atProvider,omitempty"`
 }
 
-// A Pod is a managed RunPod GPU workload.
+// A Pod is a managed RunPod GPU workload. The name RunPod assigns to the
+// pod on create is metadata.name with "-" plus the first 8 hex characters
+// of this resource's UID appended, making it deterministic and reproducible
+// across reconciles. This lets the controller recover if it crashes
+// between requesting the pod and recording its ID, instead of either
+// leaking a billed GPU or refusing to proceed.
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Namespaced,categories=crossplane
 // +kubebuilder:subresource:status
@@ -351,7 +356,7 @@ func (l *PodList) GetItems() []resource.Managed {
 
 // Pod type metadata.
 var (
-	PodKind             = reflect.TypeOf(Pod{}).Name()
+	PodKind             = reflect.TypeFor[Pod]().Name()
 	PodGroupKind        = schema.GroupKind{Group: Group, Kind: PodKind}.String()
 	PodKindAPIVersion   = PodKind + "." + SchemeGroupVersion.String()
 	PodGroupVersionKind = SchemeGroupVersion.WithKind(PodKind)

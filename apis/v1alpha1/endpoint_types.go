@@ -210,7 +210,13 @@ type EndpointStatus struct {
 }
 
 // An Endpoint is a managed RunPod serverless endpoint: autoscaled GPU
-// workers with scale-to-zero, billed per active second.
+// workers with scale-to-zero, billed per active second. The name RunPod
+// assigns to the endpoint (and its implicit template, in imageName mode) on
+// create is metadata.name with "-" plus the first 8 hex characters of this
+// resource's UID appended, making it deterministic and reproducible across
+// reconciles. This lets the controller recover if it crashes between
+// requesting the endpoint and recording its ID, instead of either leaking a
+// billed endpoint or refusing to proceed.
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Namespaced,categories=crossplane
 // +kubebuilder:subresource:status
@@ -285,7 +291,7 @@ func (l *EndpointList) GetItems() []resource.Managed {
 
 // Endpoint type metadata.
 var (
-	EndpointKind             = reflect.TypeOf(Endpoint{}).Name()
+	EndpointKind             = reflect.TypeFor[Endpoint]().Name()
 	EndpointGroupKind        = schema.GroupKind{Group: Group, Kind: EndpointKind}.String()
 	EndpointKindAPIVersion   = EndpointKind + "." + SchemeGroupVersion.String()
 	EndpointGroupVersionKind = SchemeGroupVersion.WithKind(EndpointKind)

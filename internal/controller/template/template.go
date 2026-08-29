@@ -1,14 +1,12 @@
+// Package template reconciles the RunPod Template managed resource.
 package template
 
 import (
-	"context"
-
+	xpcontroller "github.com/crossplane/crossplane-runtime/v2/pkg/controller"
 	managed "github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
 	xpresource "github.com/crossplane/crossplane-runtime/v2/pkg/resource"
 	"github.com/go-logr/logr"
-	"github.com/pkg/errors"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "github.com/zapr-16/provider-runpod/apis/v1alpha1"
 	v1beta1 "github.com/zapr-16/provider-runpod/apis/v1beta1"
@@ -19,56 +17,31 @@ import (
 const (
 	errNotTemplate           = "managed resource is not a Template"
 	errMissingProviderConfig = "template is missing providerConfigRef"
-	errTrackUsage            = "cannot track ProviderConfigUsage"
 )
 
-type connector struct {
-	kube  client.Client
-	usage *xpresource.ProviderConfigUsageTracker
-	log   logr.Logger
-}
-
-var (
-	_ managed.ExternalConnector = (*connector)(nil)
-	_ managed.ExternalClient    = (*external)(nil)
-)
-
-func (c *connector) Connect(ctx context.Context, mg xpresource.Managed) (managed.ExternalClient, error) {
-	tmpl, ok := mg.(*v1alpha1.Template)
-	if !ok {
-		return nil, errors.New(errNotTemplate)
-	}
-
-	ref := tmpl.GetProviderConfigReference()
-	if ref == nil || ref.Name == "" {
-		return nil, errors.New(errMissingProviderConfig)
-	}
-
-	runpodclient.NormalizeProviderConfigRefKind(ref)
-
-	// Record the usage so Crossplane's in-use protection blocks deletion
-	// of the ProviderConfig while this Template still needs it.
-	if err := c.usage.Track(ctx, tmpl); err != nil {
-		return nil, errors.Wrap(err, errTrackUsage)
-	}
-
-	rc, err := runpodclient.ClientForProviderConfigRef(ctx, c.kube, tmpl.GetNamespace(), *ref)
-	if err != nil {
-		return nil, err
-	}
-
-	return &external{
-		client: rc,
-		log:    c.log.WithValues("template", tmpl.GetName()),
-	}, nil
-}
+var _ managed.ExternalClient = (*external)(nil)
 
 // Setup registers the Template managed-resource controller with the manager.
-func Setup(mgr ctrl.Manager, log logr.Logger) error {
-	conn := &connector{
-		kube:  mgr.GetClient(),
-		usage: xpresource.NewProviderConfigUsageTracker(mgr.GetClient(), &v1beta1.ProviderConfigUsage{}),
-		log:   log,
+func Setup(mgr ctrl.Manager, log logr.Logger, o xpcontroller.Options) error {
+	conn := &register.Connector[*v1alpha1.Template]{
+		Kube:                     mgr.GetClient(),
+		Usage:                    xpresource.NewProviderConfigUsageTracker(mgr.GetClient(), &v1beta1.ProviderConfigUsage{}),
+		Log:                      log,
+		ErrNotKind:               errNotTemplate,
+		ErrMissingProviderConfig: errMissingProviderConfig,
+		NewExternal: func(rc *runpodclient.Client, cr *v1alpha1.Template, log logr.Logger) managed.ExternalClient {
+			return &external{
+				client: rc,
+				log:    log.WithValues("template", cr.GetName()),
+			}
+		},
 	}
-	return register.ManagedController(mgr, "Template", &v1alpha1.Template{}, conn, log)
+	// deterministicExternalName is false: Create() sends metadata.name as-is,
+	// so the reconciler must not retry Create after an unrecorded outcome.
+	return register.ManagedController(mgr, register.Registration{
+		Kind:      "Template",
+		Object:    &v1alpha1.Template{},
+		List:      &v1alpha1.TemplateList{},
+		Connector: conn,
+	}, log, o)
 }

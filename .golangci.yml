@@ -1,0 +1,49 @@
+version: "2"
+
+# Curated linter set. Complexity linters (gocyclo, gocognit, cyclop, funlen,
+# nestif, maintidx) are intentionally NOT enabled: this project does not
+# split functions to satisfy a complexity metric, so those linters would
+# only generate findings nobody is going to act on.
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - unused
+    - ineffassign
+    - misspell
+    - errorlint
+    - gosec
+    - gocritic
+    - revive
+    - unconvert
+    - unparam
+    - prealloc
+    - copyloopvar
+    - nolintlint
+    - whitespace
+
+  exclusions:
+    # zz_generated.* files carry the standard "Code generated ... DO NOT
+    # EDIT." header, so the default `strict` generated-file detection above
+    # already skips them; the explicit path is kept for clarity and as a
+    # backstop if a generator ever drops that header.
+    paths:
+      - zz_generated\..*\.go$
+      - ^package/
+      - ^hack/
+
+    rules:
+      # Table-driven tests build request/response fixtures with repeated
+      # literals and pass fixed, non-attacker-controlled values (file modes,
+      # loop indices) into helpers gosec flags for other contexts; relaxing
+      # gosec and unparam in test files avoids noise without hiding real
+      # findings in the linted (non-test) code.
+      - path: _test\.go
+        linters:
+          - gosec
+          - unparam
+
+run:
+  tests: true

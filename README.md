@@ -27,7 +27,7 @@ The provider ships as two OCI artifacts: a controller image and a
 Crossplane package (`.xpkg`) that references it. Install the package:
 
 ```bash
-crossplane xpkg install provider ghcr.io/zapr-16/provider-runpod:v0.5.0-pkg
+crossplane xpkg install provider ghcr.io/zapr-16/provider-runpod:v0.6.0-pkg
 ```
 
 (The `-pkg` suffix distinguishes the package from the raw controller
@@ -75,6 +75,21 @@ A namespace-scoped `ProviderConfig` (same `spec` shape) is also available
 for credentials that should only be usable from a single namespace; set
 `spec.providerConfigRef: {name: default, kind: ProviderConfig}` on the
 `Pod`/`Endpoint` to use it.
+
+### Runtime flags
+
+The controller binary accepts the following flags (set via
+`spec.controllerConfigRef`/`DeploymentRuntimeConfig` `args`, or directly on
+the container command when running outside Crossplane's package manager):
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--debug` | `false` | Development zap logging (human-readable, more verbose) instead of production JSON. |
+| `--poll-interval` | `1m` | How often each resource is polled for drift when no watch event has triggered a reconcile. |
+| `--max-reconcile-rate` | `10` | Global maximum reconciles per second across every controller. |
+| `--leader-election` | `true` | Use leader election for the controller manager. |
+| `--sync-interval` | `1h` | How often the manager's watch cache resyncs against the API server. |
+| `--enable-management-policies` | `true` | Enable Crossplane's beta Management Policies support. |
 
 ## Create a Pod
 
@@ -222,6 +237,20 @@ spec:
         value: "Qwen/Qwen2.5-Coder-7B-Instruct"
     containerDiskInGb: 30
 ```
+
+## Create recovery
+
+`Pod` and `Endpoint` send RunPod a name of `<metadata.name>-<uid8>` on
+create, where `uid8` is the first 8 characters of the resource's Kubernetes
+UID — so it appears with this suffix in the RunPod console. This makes the
+name deterministic and reproducible across reconciles: if the controller
+crashes or loses its API server connection between the create call and
+recording the resulting ID, the next reconcile lists pods/endpoints, finds
+the one already created under that exact name, and adopts it instead of
+either creating a duplicate (double billing) or refusing to proceed forever.
+Adoption requires the image/GPU (Pod) or template/image (Endpoint) to also
+match the spec; if more than one resource carries the name, or the identity
+fields don't match, the reconciler reports an error rather than guessing.
 
 ## Docs
 

@@ -1,3 +1,5 @@
+// Package clients implements the RunPod REST API client used by the
+// provider's managed-resource controllers.
 package clients
 
 import (
@@ -19,7 +21,7 @@ import (
 const (
 	defaultBaseURL        = "https://rest.runpod.io/v1"
 	errExtractCredentials = "cannot extract RunPod API key from ProviderConfig"
-	errEmptyCredentials   = "RunPod API key is empty"
+	errEmptyCredentials   = "RunPod API key is empty" //nolint:gosec // error message text, not a credential value
 	errCreateRequest      = "cannot create RunPod request"
 	errDoRequest          = "cannot execute RunPod request"
 	errDecodeResponse     = "cannot decode RunPod response"
@@ -109,6 +111,7 @@ type UpdatePodRequest struct {
 // PodResponse mirrors the subset of the RunPod Pod GET response needed by Observe().
 type PodResponse struct {
 	ID                      string            `json:"id"`
+	Name                    string            `json:"name"`
 	DesiredStatus           string            `json:"desiredStatus"`
 	PublicIP                string            `json:"publicIp"`
 	PortMappings            map[string]int32  `json:"portMappings"`
@@ -125,6 +128,7 @@ type PodResponse struct {
 	Locked                  bool              `json:"locked"`
 	Interruptible           bool              `json:"interruptible"`
 	ContainerRegistryAuthID string            `json:"containerRegistryAuthId"`
+	CPUFlavorID             string            `json:"cpuFlavorId"`
 	GPU                     struct {
 		DisplayName string `json:"displayName"`
 	} `json:"gpu"`
@@ -173,6 +177,11 @@ func (c *Client) NewRequest(ctx context.Context, method, path string, body io.Re
 }
 
 // Do executes an HTTP request with the configured client.
+//
+// endpoint fixed at client construction (defaultBaseURL or an operator-set
+// override), not attacker-controlled input forwarded from a caller.
+//
+//nolint:gosec // G704: the request target is c.baseURL, a RunPod API
 func (c *Client) Do(req *http.Request) (*http.Response, error) {
 	return c.httpClient.Do(req)
 }
@@ -250,6 +259,20 @@ func (c *Client) GetPod(ctx context.Context, podID string) (*PodResponse, bool, 
 		return nil, found, err
 	}
 	return &out, true, nil
+}
+
+// ListPods retrieves every pod visible to the configured API key (GET
+// /pods). It exists only to support ambiguous-create recovery: the pod
+// controller's Observe lists and matches on the deterministic create name
+// when it cannot tell whether a prior Create call ever reached RunPod
+// (meta.ExternalCreateIncomplete). It is never called on the normal Observe
+// path, which always has an external-name to GET directly.
+func (c *Client) ListPods(ctx context.Context) ([]PodResponse, error) {
+	var out []PodResponse
+	if _, err := c.getStrict(ctx, podsPath, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // CreatePod creates a new RunPod pod and returns its pod ID.

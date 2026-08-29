@@ -6,13 +6,13 @@ GOLANGCI_LINT_VERSION ?= v2.11.4
 CONTROLLER_GEN := $(GOBIN)/controller-gen
 GOLANGCI_LINT := $(GOBIN)/golangci-lint
 
-.PHONY: help generate build lint test reviewable xpkg-build xpkg-push
+.PHONY: help generate build lint test reviewable xpkg-build xpkg-push spec-update
 
 XPKG_REG  ?= ghcr.io/zapr-16
 XPKG_NAME ?= provider-runpod
 # Keep in sync with the controller image tag in package/crossplane.yaml and
 # the install command in README.md.
-XPKG_TAG  ?= v0.5.0
+XPKG_TAG  ?= v0.6.0
 XPKG_FILE := $(XPKG_NAME)-$(XPKG_TAG).xpkg
 
 help: ## Print available targets
@@ -38,6 +38,12 @@ test: ## Run unit tests with the race detector
 	go test -v -race ./...
 
 reviewable: generate lint ## Run generation and linting
+
+# internal/clients/conformance_test.go pins its assertions against the
+# vendored copy at hack/spec/openapi.json, so a spec-update does not change
+# test behavior until someone re-runs `go test` and reviews any new diffs.
+spec-update: ## Re-fetch the vendored RunPod OpenAPI spec
+	curl -sSL --proto '=https' --proto-redir '=https' -o hack/spec/openapi.json https://rest.runpod.io/v1/openapi.json
 
 xpkg-build: generate ## Build the Crossplane provider package (.xpkg)
 	rm -f $(XPKG_FILE)

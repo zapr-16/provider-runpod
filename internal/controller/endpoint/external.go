@@ -13,18 +13,21 @@ import (
 
 	v1alpha1 "github.com/zapr-16/provider-runpod/apis/v1alpha1"
 	runpodclient "github.com/zapr-16/provider-runpod/internal/clients"
+	"github.com/zapr-16/provider-runpod/internal/controller/fieldcmp"
 )
 
 const (
-	errGetEndpoint    = "cannot get endpoint from RunPod API"
-	errGetTemplate    = "cannot get template from RunPod API"
-	errCreateTemplate = "cannot create template via RunPod API"
-	errCreateEndpoint = "cannot create endpoint via RunPod API"
-	errUpdateEndpoint = "cannot update endpoint via RunPod API"
-	errUpdateTemplate = "cannot update template via RunPod API"
-	errDeleteEndpoint = "cannot delete endpoint via RunPod API"
-	errNoImageName    = "imageName must be set when templateId is not set"
-	errRecycleWorkers = "cannot recycle endpoint workers after template change"
+	errGetEndpoint     = "cannot get endpoint from RunPod API"
+	errGetTemplate     = "cannot get template from RunPod API"
+	errCreateTemplate  = "cannot create template via RunPod API"
+	errCreateEndpoint  = "cannot create endpoint via RunPod API"
+	errUpdateEndpoint  = "cannot update endpoint via RunPod API"
+	errUpdateTemplate  = "cannot update template via RunPod API"
+	errDeleteEndpoint  = "cannot delete endpoint via RunPod API"
+	errNoImageName     = "imageName must be set when templateId is not set"
+	errRecycleWorkers  = "cannot recycle endpoint workers after template change"
+	errListEndpoints   = "cannot list endpoints from RunPod API"
+	errAmbiguousCreate = "cannot recover from an ambiguous endpoint create"
 
 	// logKeyTemplateID is the structured-logging key used to annotate log
 	// lines with the RunPod template ID backing an Endpoint.
@@ -49,7 +52,15 @@ func (e *external) Observe(ctx context.Context, mg xpresource.Managed) (managed.
 
 	externalName := meta.GetExternalName(ep)
 	if externalName == "" {
-		return managed.ExternalObservation{ResourceExists: false}, nil
+		if !meta.ExternalCreateIncomplete(ep) {
+			return managed.ExternalObservation{ResourceExists: false}, nil
+		}
+		// The managed reconciler refuses to call Create again while a prior
+		// create's outcome is unknown, unless the external name is
+		// deterministic (see managed.WithDeterministicExternalName, wired in
+		// this controller's Setup). Since it is, recover instead of leaving
+		// the resource stuck.
+		return e.adoptIncompleteCreate(ctx, ep)
 	}
 
 	response, found, err := e.client.GetEndpoint(ctx, externalName)
@@ -61,6 +72,89 @@ func (e *external) Observe(ctx context.Context, mg xpresource.Managed) (managed.
 		return managed.ExternalObservation{ResourceExists: false}, nil
 	}
 
+	return e.observeResponse(ctx, ep, response, false)
+}
+
+// adoptIncompleteCreate handles Observe() when the external-name annotation
+// is empty and the last recorded create attempt never confirmed success
+// (meta.ExternalCreateIncomplete): the process may have crashed between the
+// RunPod POST and persisting the external name, so a plain retry could
+// orphan an endpoint that is already running and billing. Because Create()
+// sends a deterministic name (fieldcmp.DerivedName), listing endpoints and
+// matching on that exact name recovers the situation without guessing: at
+// most one endpoint should ever carry it.
+func (e *external) adoptIncompleteCreate(ctx context.Context, ep *v1alpha1.Endpoint) (managed.ExternalObservation, error) {
+	derivedName := fieldcmp.DerivedName(ep.GetName(), string(ep.GetUID()))
+
+	endpoints, err := e.client.ListEndpoints(ctx)
+	if err != nil {
+		return managed.ExternalObservation{}, errors.Wrap(err, errListEndpoints)
+	}
+
+	var match *runpodclient.EndpointResponse
+	for i := range endpoints {
+		if endpoints[i].Name != derivedName {
+			continue
+		}
+		if match != nil {
+			return managed.ExternalObservation{}, errors.Errorf("%s: name %q matches more than one endpoint (at least %q and %q)", errAmbiguousCreate, derivedName, match.ID, endpoints[i].ID)
+		}
+		match = &endpoints[i]
+	}
+
+	if match == nil {
+		// Nothing was ever created under this name (or RunPod never received
+		// the request): a fresh Create is safe.
+		return managed.ExternalObservation{ResourceExists: false}, nil
+	}
+
+	identityMatches, err := e.endpointIdentityMatches(ctx, ep.Spec.ForProvider, match)
+	if err != nil {
+		return managed.ExternalObservation{}, errors.Wrap(err, errGetTemplate)
+	}
+	if !identityMatches {
+		return managed.ExternalObservation{}, errors.Errorf("%s: endpoint %q has name %q but its template/image does not match spec.forProvider", errAmbiguousCreate, match.ID, derivedName)
+	}
+
+	e.log.Info("Recovered external-name for endpoint after an ambiguous create", "external-name", match.ID, "derived-name", derivedName)
+	meta.SetExternalName(ep, match.ID)
+
+	// ResourceLateInitialized here persists only the external-name
+	// annotation recovered above; it is not spec late-init.
+	return e.observeResponse(ctx, ep, match, true)
+}
+
+// endpointIdentityMatches reports whether r plausibly is the endpoint spec
+// describes, used only to guard adoption after an ambiguous create: a name
+// match alone is not proof, since a name collision (however unlikely with
+// the uid8 suffix) must never cause the wrong billed resource to be
+// adopted. In templateId mode identity is just the referenced template ID;
+// in imageName mode the implicit template backing r must carry the same
+// image.
+func (e *external) endpointIdentityMatches(ctx context.Context, spec v1alpha1.EndpointParameters, r *runpodclient.EndpointResponse) (bool, error) {
+	if spec.TemplateID != nil {
+		return *spec.TemplateID == r.TemplateID, nil
+	}
+	if spec.ImageName == nil || r.TemplateID == "" {
+		return false, nil
+	}
+
+	template, found, err := e.client.GetTemplate(ctx, r.TemplateID)
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		return false, nil
+	}
+
+	return template.ImageName == *spec.ImageName, nil
+}
+
+// observeResponse populates ep's observation and conditions from a fetched
+// or adopted RunPod response and returns the resulting ExternalObservation.
+// lateInit is true only when called from adoptIncompleteCreate, to persist
+// the external-name annotation recovered there.
+func (e *external) observeResponse(ctx context.Context, ep *v1alpha1.Endpoint, response *runpodclient.EndpointResponse, lateInit bool) (managed.ExternalObservation, error) {
 	runtimeEndpoint := runtimeEndpointURL(response.ID)
 	ep.Status.AtProvider = v1alpha1.EndpointObservation{
 		EndpointID:      response.ID,
@@ -92,10 +186,14 @@ func (e *external) Observe(ctx context.Context, mg xpresource.Managed) (managed.
 		}
 	}
 
+	// lateInit is only ever true when this call came from
+	// adoptIncompleteCreate, to persist the external-name annotation it just
+	// recovered. This provider otherwise never late-initializes spec fields.
 	return managed.ExternalObservation{
-		ResourceExists:    true,
-		ResourceUpToDate:  upToDate,
-		ConnectionDetails: connectionDetails(response.ID),
+		ResourceExists:          true,
+		ResourceUpToDate:        upToDate,
+		ResourceLateInitialized: lateInit,
+		ConnectionDetails:       connectionDetails(response.ID),
 	}, nil
 }
 
@@ -105,7 +203,14 @@ func (e *external) Create(ctx context.Context, mg xpresource.Managed) (managed.E
 		return managed.ExternalCreation{}, errors.New(errNotEndpoint)
 	}
 
-	name := ep.GetName()
+	// A deterministic name (base name plus a fragment of the resource UID)
+	// lets Observe() recover this endpoint by listing and matching on it if
+	// the controller crashes between this Create call and persisting the
+	// external-name annotation, instead of leaking a billed endpoint or
+	// refusing to proceed forever. See fieldcmp.DerivedName. The same name
+	// is used for the implicit template created below; only the endpoint
+	// name participates in adoption matching.
+	name := fieldcmp.DerivedName(ep.GetName(), string(ep.GetUID()))
 
 	if ep.Spec.ForProvider.TemplateID != nil {
 		// templateId mode: the referenced template is owned elsewhere, so
@@ -132,10 +237,10 @@ func (e *external) Create(ctx context.Context, mg xpresource.Managed) (managed.E
 		Name:                    name,
 		ImageName:               *ep.Spec.ForProvider.ImageName,
 		IsServerless:            true,
-		Env:                     buildEnvMap(ep.Spec.ForProvider.Env),
+		Env:                     fieldcmp.BuildEnvMap(ep.Spec.ForProvider.Env),
 		ContainerDiskInGb:       ep.Spec.ForProvider.ContainerDiskInGb,
-		DockerStartCmd:          cloneStrings(ep.Spec.ForProvider.DockerStartCmd),
-		DockerEntrypoint:        cloneStrings(ep.Spec.ForProvider.DockerEntrypoint),
+		DockerStartCmd:          fieldcmp.CloneStrings(ep.Spec.ForProvider.DockerStartCmd),
+		DockerEntrypoint:        fieldcmp.CloneStrings(ep.Spec.ForProvider.DockerEntrypoint),
 		ContainerRegistryAuthID: ep.Spec.ForProvider.ContainerRegistryAuthID,
 	})
 	if err != nil {
@@ -173,7 +278,7 @@ func (e *external) Update(ctx context.Context, mg xpresource.Managed) (managed.E
 
 	spec := ep.Spec.ForProvider
 	endpointPatch := runpodclient.UpdateEndpointRequest{
-		GPUTypeIDs:          cloneStrings(spec.GPUTypeIDs),
+		GPUTypeIDs:          fieldcmp.CloneStrings(spec.GPUTypeIDs),
 		GPUCount:            spec.GPUCount,
 		WorkersMin:          spec.WorkersMin,
 		WorkersMax:          spec.WorkersMax,
@@ -182,13 +287,13 @@ func (e *external) Update(ctx context.Context, mg xpresource.Managed) (managed.E
 		ScalerType:          scalerTypeString(spec.ScalerType),
 		ScalerValue:         spec.ScalerValue,
 		NetworkVolumeID:     spec.NetworkVolumeID,
-		DataCenterIDs:       cloneStrings(spec.DataCenterIDs),
+		DataCenterIDs:       fieldcmp.CloneStrings(spec.DataCenterIDs),
 		ExecutionTimeoutMs:  spec.ExecutionTimeoutMs,
 		VCPUCount:           spec.VCPUCount,
-		CPUFlavorIDs:        cloneStrings(spec.CPUFlavorIDs),
-		AllowedCudaVersions: cloneStrings(spec.AllowedCudaVersions),
+		CPUFlavorIDs:        fieldcmp.CloneStrings(spec.CPUFlavorIDs),
+		AllowedCudaVersions: fieldcmp.CloneStrings(spec.AllowedCudaVersions),
 		MinCudaVersion:      spec.MinCudaVersion,
-		NetworkVolumeIDs:    cloneStrings(spec.NetworkVolumeIDs),
+		NetworkVolumeIDs:    fieldcmp.CloneStrings(spec.NetworkVolumeIDs),
 	}
 	if spec.TemplateID != nil {
 		endpointPatch.TemplateID = spec.TemplateID
@@ -238,10 +343,10 @@ func (e *external) Update(ctx context.Context, mg xpresource.Managed) (managed.E
 
 	if err := e.client.UpdateTemplate(ctx, templateID, runpodclient.UpdateTemplateRequest{
 		ImageName:               spec.ImageName,
-		Env:                     buildEnvMap(spec.Env),
+		Env:                     fieldcmp.BuildEnvMap(spec.Env),
 		ContainerDiskInGb:       spec.ContainerDiskInGb,
-		DockerStartCmd:          cloneStrings(spec.DockerStartCmd),
-		DockerEntrypoint:        cloneStrings(spec.DockerEntrypoint),
+		DockerStartCmd:          fieldcmp.CloneStrings(spec.DockerStartCmd),
+		DockerEntrypoint:        fieldcmp.CloneStrings(spec.DockerEntrypoint),
 		ContainerRegistryAuthID: spec.ContainerRegistryAuthID,
 	}); err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, errUpdateTemplate)
@@ -329,7 +434,7 @@ func buildCreateEndpointRequest(name *string, templateID string, spec v1alpha1.E
 	return runpodclient.CreateEndpointRequest{
 		Name:                name,
 		TemplateID:          templateID,
-		GPUTypeIDs:          cloneStrings(spec.GPUTypeIDs),
+		GPUTypeIDs:          fieldcmp.CloneStrings(spec.GPUTypeIDs),
 		GPUCount:            spec.GPUCount,
 		WorkersMin:          spec.WorkersMin,
 		WorkersMax:          spec.WorkersMax,
@@ -338,14 +443,14 @@ func buildCreateEndpointRequest(name *string, templateID string, spec v1alpha1.E
 		ScalerType:          scalerTypeString(spec.ScalerType),
 		ScalerValue:         spec.ScalerValue,
 		NetworkVolumeID:     spec.NetworkVolumeID,
-		DataCenterIDs:       cloneStrings(spec.DataCenterIDs),
+		DataCenterIDs:       fieldcmp.CloneStrings(spec.DataCenterIDs),
 		ExecutionTimeoutMs:  spec.ExecutionTimeoutMs,
 		ComputeType:         spec.ComputeType,
 		VCPUCount:           spec.VCPUCount,
-		CPUFlavorIDs:        cloneStrings(spec.CPUFlavorIDs),
-		AllowedCudaVersions: cloneStrings(spec.AllowedCudaVersions),
+		CPUFlavorIDs:        fieldcmp.CloneStrings(spec.CPUFlavorIDs),
+		AllowedCudaVersions: fieldcmp.CloneStrings(spec.AllowedCudaVersions),
 		MinCudaVersion:      spec.MinCudaVersion,
-		NetworkVolumeIDs:    cloneStrings(spec.NetworkVolumeIDs),
+		NetworkVolumeIDs:    fieldcmp.CloneStrings(spec.NetworkVolumeIDs),
 	}
 }
 
@@ -372,7 +477,7 @@ func hasEndpointDrift(spec v1alpha1.EndpointParameters, observed *runpodclient.E
 	// dataCenterIds is not compared: the API accepts it but never echoes it.
 	// Nil and empty both mean "unmanaged": the PATCH payload uses omitempty,
 	// so an empty list could never be reconciled anyway.
-	if len(spec.GPUTypeIDs) > 0 && !stringSlicesEqual(spec.GPUTypeIDs, observed.GPUTypeIDs) {
+	if len(spec.GPUTypeIDs) > 0 && !fieldcmp.StringSlicesEqual(spec.GPUTypeIDs, observed.GPUTypeIDs) {
 		return true
 	}
 	// computeType/vcpuCount/cpuFlavorIds/allowedCudaVersions/minCudaVersion/networkVolumeIds
@@ -392,15 +497,15 @@ func hasTemplateDrift(spec v1alpha1.EndpointParameters, observed runpodclient.Te
 		return true
 	}
 	// Nil and empty both mean "unmanaged" (see hasEndpointDrift).
-	if len(spec.Env) > 0 && !stringMapsEqual(buildEnvMap(spec.Env), observed.Env) {
+	if len(spec.Env) > 0 && !fieldcmp.StringMapsEqual(fieldcmp.BuildEnvMap(spec.Env), observed.Env) {
 		return true
 	}
 	// GET /templates echoes these, unlike the endpoint-level fields above, so
 	// they get real drift detection. Command arrays are order-sensitive.
-	if len(spec.DockerStartCmd) > 0 && !stringSlicesEqual(spec.DockerStartCmd, observed.DockerStartCmd) {
+	if len(spec.DockerStartCmd) > 0 && !fieldcmp.StringSlicesEqual(spec.DockerStartCmd, observed.DockerStartCmd) {
 		return true
 	}
-	if len(spec.DockerEntrypoint) > 0 && !stringSlicesEqual(spec.DockerEntrypoint, observed.DockerEntrypoint) {
+	if len(spec.DockerEntrypoint) > 0 && !fieldcmp.StringSlicesEqual(spec.DockerEntrypoint, observed.DockerEntrypoint) {
 		return true
 	}
 	if stringPtrDrifts(spec.ContainerRegistryAuthID, observed.ContainerRegistryAuthID) {
@@ -452,49 +557,4 @@ func int32PtrDrifts(desired *int32, observed int32) bool {
 
 func stringPtrDrifts(desired *string, observed string) bool {
 	return desired != nil && *desired != observed
-}
-
-func stringSlicesEqual(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func stringMapsEqual(a, b map[string]string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for k, av := range a {
-		if bv, ok := b[k]; !ok || bv != av {
-			return false
-		}
-	}
-	return true
-}
-
-func buildEnvMap(in []v1alpha1.EnvVar) map[string]string {
-	if len(in) == 0 {
-		return nil
-	}
-
-	out := make(map[string]string, len(in))
-	for _, env := range in {
-		out[env.Name] = env.Value
-	}
-	return out
-}
-
-func cloneStrings(in []string) []string {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]string, len(in))
-	copy(out, in)
-	return out
 }

@@ -265,7 +265,7 @@ func TestCreate(t *testing.T) {
 
 	t.Run("MissingSecretReturnsError", func(t *testing.T) {
 		kube := fake.NewClientBuilder().WithScheme(testScheme(t)).Build()
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 			t.Fatal("Create() should not call the RunPod API when the secret is missing")
 		}))
 		defer server.Close()
@@ -296,7 +296,7 @@ func TestCreate(t *testing.T) {
 			},
 		}
 		kube := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(secret).Build()
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 			t.Fatal("Create() should not call the RunPod API when the secret is in a different namespace")
 		}))
 		defer server.Close()
@@ -323,7 +323,7 @@ func TestCreate(t *testing.T) {
 			},
 		}
 		kube := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(secret).Build()
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 			t.Fatal("Create() should not call the RunPod API when a secret key is missing")
 		}))
 		defer server.Close()
@@ -354,7 +354,7 @@ func TestCreate(t *testing.T) {
 			},
 		}
 		kube := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(secret).Build()
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 		}))
 		defer server.Close()
@@ -380,7 +380,7 @@ func TestCreate(t *testing.T) {
 func TestUpdate(t *testing.T) {
 	t.Run("IsANoOp", func(t *testing.T) {
 		var calls int
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 			calls++
 		}))
 		defer server.Close()
@@ -421,7 +421,7 @@ func TestDelete(t *testing.T) {
 
 	t.Run("EmptyExternalNameSkipsHTTPCalls", func(t *testing.T) {
 		var calls int
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 			calls++
 		}))
 		defer server.Close()
@@ -436,7 +436,7 @@ func TestDelete(t *testing.T) {
 	})
 
 	t.Run("NotFoundDeleteIsSuccess", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusNotFound)
 		}))
 		defer server.Close()
@@ -451,7 +451,7 @@ func TestDelete(t *testing.T) {
 	})
 
 	t.Run("ServerErrorReturnsError", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 		}))
 		defer server.Close()

@@ -32,7 +32,13 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: A Pod is a managed RunPod GPU workload.
+        description: |-
+          A Pod is a managed RunPod GPU workload. The name RunPod assigns to the
+          pod on create is metadata.name with "-" plus the first 8 hex characters
+          of this resource's UID appended, making it deterministic and reproducible
+          across reconciles. This lets the controller recover if it crashes
+          between requesting the pod and recording its ID, instead of either
+          leaking a billed GPU or refusing to proceed.
         properties:
           apiVersion:
             description: |-
