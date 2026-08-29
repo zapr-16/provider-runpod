@@ -17,15 +17,17 @@ import (
 )
 
 const (
-	errGetEndpoint    = "cannot get endpoint from RunPod API"
-	errGetTemplate    = "cannot get template from RunPod API"
-	errCreateTemplate = "cannot create template via RunPod API"
-	errCreateEndpoint = "cannot create endpoint via RunPod API"
-	errUpdateEndpoint = "cannot update endpoint via RunPod API"
-	errUpdateTemplate = "cannot update template via RunPod API"
-	errDeleteEndpoint = "cannot delete endpoint via RunPod API"
-	errNoImageName    = "imageName must be set when templateId is not set"
-	errRecycleWorkers = "cannot recycle endpoint workers after template change"
+	errGetEndpoint     = "cannot get endpoint from RunPod API"
+	errGetTemplate     = "cannot get template from RunPod API"
+	errCreateTemplate  = "cannot create template via RunPod API"
+	errCreateEndpoint  = "cannot create endpoint via RunPod API"
+	errUpdateEndpoint  = "cannot update endpoint via RunPod API"
+	errUpdateTemplate  = "cannot update template via RunPod API"
+	errDeleteEndpoint  = "cannot delete endpoint via RunPod API"
+	errNoImageName     = "imageName must be set when templateId is not set"
+	errRecycleWorkers  = "cannot recycle endpoint workers after template change"
+	errListEndpoints   = "cannot list endpoints from RunPod API"
+	errAmbiguousCreate = "cannot recover from an ambiguous endpoint create"
 
 	// logKeyTemplateID is the structured-logging key used to annotate log
 	// lines with the RunPod template ID backing an Endpoint.
@@ -50,7 +52,15 @@ func (e *external) Observe(ctx context.Context, mg xpresource.Managed) (managed.
 
 	externalName := meta.GetExternalName(ep)
 	if externalName == "" {
-		return managed.ExternalObservation{ResourceExists: false}, nil
+		if !meta.ExternalCreateIncomplete(ep) {
+			return managed.ExternalObservation{ResourceExists: false}, nil
+		}
+		// The managed reconciler refuses to call Create again while a prior
+		// create's outcome is unknown, unless the external name is
+		// deterministic (see managed.WithDeterministicExternalName, wired in
+		// this controller's Setup). Since it is, recover instead of leaving
+		// the resource stuck.
+		return e.adoptIncompleteCreate(ctx, ep)
 	}
 
 	response, found, err := e.client.GetEndpoint(ctx, externalName)
@@ -62,6 +72,89 @@ func (e *external) Observe(ctx context.Context, mg xpresource.Managed) (managed.
 		return managed.ExternalObservation{ResourceExists: false}, nil
 	}
 
+	return e.observeResponse(ctx, ep, response, false)
+}
+
+// adoptIncompleteCreate handles Observe() when the external-name annotation
+// is empty and the last recorded create attempt never confirmed success
+// (meta.ExternalCreateIncomplete): the process may have crashed between the
+// RunPod POST and persisting the external name, so a plain retry could
+// orphan an endpoint that is already running and billing. Because Create()
+// sends a deterministic name (fieldcmp.DerivedName), listing endpoints and
+// matching on that exact name recovers the situation without guessing: at
+// most one endpoint should ever carry it.
+func (e *external) adoptIncompleteCreate(ctx context.Context, ep *v1alpha1.Endpoint) (managed.ExternalObservation, error) {
+	derivedName := fieldcmp.DerivedName(ep.GetName(), string(ep.GetUID()))
+
+	endpoints, err := e.client.ListEndpoints(ctx)
+	if err != nil {
+		return managed.ExternalObservation{}, errors.Wrap(err, errListEndpoints)
+	}
+
+	var match *runpodclient.EndpointResponse
+	for i := range endpoints {
+		if endpoints[i].Name != derivedName {
+			continue
+		}
+		if match != nil {
+			return managed.ExternalObservation{}, errors.Errorf("%s: name %q matches more than one endpoint (at least %q and %q)", errAmbiguousCreate, derivedName, match.ID, endpoints[i].ID)
+		}
+		match = &endpoints[i]
+	}
+
+	if match == nil {
+		// Nothing was ever created under this name (or RunPod never received
+		// the request): a fresh Create is safe.
+		return managed.ExternalObservation{ResourceExists: false}, nil
+	}
+
+	identityMatches, err := e.endpointIdentityMatches(ctx, ep.Spec.ForProvider, match)
+	if err != nil {
+		return managed.ExternalObservation{}, errors.Wrap(err, errGetTemplate)
+	}
+	if !identityMatches {
+		return managed.ExternalObservation{}, errors.Errorf("%s: endpoint %q has name %q but its template/image does not match spec.forProvider", errAmbiguousCreate, match.ID, derivedName)
+	}
+
+	e.log.Info("Recovered external-name for endpoint after an ambiguous create", "external-name", match.ID, "derived-name", derivedName)
+	meta.SetExternalName(ep, match.ID)
+
+	// ResourceLateInitialized here persists only the external-name
+	// annotation recovered above; it is not spec late-init.
+	return e.observeResponse(ctx, ep, match, true)
+}
+
+// endpointIdentityMatches reports whether r plausibly is the endpoint spec
+// describes, used only to guard adoption after an ambiguous create: a name
+// match alone is not proof, since a name collision (however unlikely with
+// the uid8 suffix) must never cause the wrong billed resource to be
+// adopted. In templateId mode identity is just the referenced template ID;
+// in imageName mode the implicit template backing r must carry the same
+// image.
+func (e *external) endpointIdentityMatches(ctx context.Context, spec v1alpha1.EndpointParameters, r *runpodclient.EndpointResponse) (bool, error) {
+	if spec.TemplateID != nil {
+		return *spec.TemplateID == r.TemplateID, nil
+	}
+	if spec.ImageName == nil || r.TemplateID == "" {
+		return false, nil
+	}
+
+	template, found, err := e.client.GetTemplate(ctx, r.TemplateID)
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		return false, nil
+	}
+
+	return template.ImageName == *spec.ImageName, nil
+}
+
+// observeResponse populates ep's observation and conditions from a fetched
+// or adopted RunPod response and returns the resulting ExternalObservation.
+// lateInit is true only when called from adoptIncompleteCreate, to persist
+// the external-name annotation recovered there.
+func (e *external) observeResponse(ctx context.Context, ep *v1alpha1.Endpoint, response *runpodclient.EndpointResponse, lateInit bool) (managed.ExternalObservation, error) {
 	runtimeEndpoint := runtimeEndpointURL(response.ID)
 	ep.Status.AtProvider = v1alpha1.EndpointObservation{
 		EndpointID:      response.ID,
@@ -93,10 +186,14 @@ func (e *external) Observe(ctx context.Context, mg xpresource.Managed) (managed.
 		}
 	}
 
+	// lateInit is only ever true when this call came from
+	// adoptIncompleteCreate, to persist the external-name annotation it just
+	// recovered. This provider otherwise never late-initializes spec fields.
 	return managed.ExternalObservation{
-		ResourceExists:    true,
-		ResourceUpToDate:  upToDate,
-		ConnectionDetails: connectionDetails(response.ID),
+		ResourceExists:          true,
+		ResourceUpToDate:        upToDate,
+		ResourceLateInitialized: lateInit,
+		ConnectionDetails:       connectionDetails(response.ID),
 	}, nil
 }
 
@@ -106,7 +203,14 @@ func (e *external) Create(ctx context.Context, mg xpresource.Managed) (managed.E
 		return managed.ExternalCreation{}, errors.New(errNotEndpoint)
 	}
 
-	name := ep.GetName()
+	// A deterministic name (base name plus a fragment of the resource UID)
+	// lets Observe() recover this endpoint by listing and matching on it if
+	// the controller crashes between this Create call and persisting the
+	// external-name annotation, instead of leaking a billed endpoint or
+	// refusing to proceed forever. See fieldcmp.DerivedName. The same name
+	// is used for the implicit template created below; only the endpoint
+	// name participates in adoption matching.
+	name := fieldcmp.DerivedName(ep.GetName(), string(ep.GetUID()))
 
 	if ep.Spec.ForProvider.TemplateID != nil {
 		// templateId mode: the referenced template is owned elsewhere, so

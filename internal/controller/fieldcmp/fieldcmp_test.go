@@ -109,3 +109,41 @@ func TestCloneStrings(t *testing.T) {
 		})
 	}
 }
+
+func TestDerivedName(t *testing.T) {
+	cases := map[string]struct {
+		base string
+		uid  string
+		want string
+	}{
+		"EmptyUIDReturnsBaseUnchanged": {
+			base: "vllm-small",
+			uid:  "",
+			want: "vllm-small",
+		},
+		"StandardUUIDUsesFirst8Chars": {
+			base: "vllm-small",
+			uid:  "550e8400-e29b-41d4-a716-446655440000",
+			want: "vllm-small-550e8400",
+		},
+		"ShortUIDUsedInFull": {
+			base: "vllm-small",
+			uid:  "ab12",
+			want: "vllm-small-ab12",
+		},
+		"ExactlyEightCharUID": {
+			base: "vllm-small",
+			uid:  "aabbccdd",
+			want: "vllm-small-aabbccdd",
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := DerivedName(tc.base, tc.uid)
+			if got != tc.want {
+				t.Fatalf("DerivedName(%q, %q) = %q, want %q", tc.base, tc.uid, got, tc.want)
+			}
+		})
+	}
+}

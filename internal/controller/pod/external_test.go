@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
 	managed "github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
@@ -817,6 +818,197 @@ func TestCreate(t *testing.T) {
 			t.Fatalf("Create() error = %q, want wrapped %q", err.Error(), errCreatePod)
 		}
 	})
+
+	t.Run("SendsNameWithUIDSuffixForDeterministicRecovery", func(t *testing.T) {
+		var gotBody runpodclient.CreatePodRequest
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+				t.Fatalf("decode request: %v", err)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"id": "pod-created"})
+		}))
+		defer server.Close()
+
+		p := &v1alpha1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "vllm-test", UID: "550e8400-e29b-41d4-a716-446655440000"},
+		}
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+		if _, err := e.Create(context.Background(), p); err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+
+		want := "vllm-test-550e8400"
+		if gotBody.Name == nil || *gotBody.Name != want {
+			t.Fatalf("Create() name = %#v, want %q", gotBody.Name, want)
+		}
+	})
+}
+
+// TestObserveAdoptsIncompleteCreate covers Observe()'s ambiguous-create
+// recovery: an empty external-name annotation combined with
+// meta.ExternalCreateIncomplete means a prior Create's result was never
+// confirmed, so Observe must list pods and match on the deterministic
+// create name instead of blindly reporting the resource missing (which
+// would let the reconciler retry Create and orphan an already-billing pod).
+func TestObserveAdoptsIncompleteCreate(t *testing.T) {
+	image := "runpod/image:latest"
+	newPod := func() *v1alpha1.Pod {
+		return &v1alpha1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "vllm-test", UID: "550e8400-e29b-41d4-a716-446655440000"},
+			Spec: v1alpha1.PodSpec{
+				ForProvider: v1alpha1.PodParameters{
+					ImageName:  &image,
+					GPUTypeIDs: []string{"NVIDIA A100-SXM4-80GB"},
+				},
+			},
+		}
+	}
+	markIncomplete := func(p *v1alpha1.Pod) {
+		meta.SetExternalCreatePending(p, time.Now())
+	}
+	derivedName := "vllm-test-550e8400"
+
+	t.Run("NoIncompleteCreateSkipsListCall", func(t *testing.T) {
+		var calls int
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+		}))
+		defer server.Close()
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+		got, err := e.Observe(context.Background(), newPod())
+		if err != nil {
+			t.Fatalf("Observe() error = %v", err)
+		}
+		if got.ResourceExists {
+			t.Fatal("Observe() ResourceExists = true, want false")
+		}
+		if calls != 0 {
+			t.Fatalf("Observe() made %d HTTP calls, want 0 (happy path never lists)", calls)
+		}
+	})
+
+	t.Run("ZeroMatchesReportsNotExists", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/pods" {
+				t.Fatalf("unexpected path: %s", r.URL.Path)
+			}
+			_, _ = w.Write([]byte(`[{"id":"pod-other","name":"unrelated"}]`))
+		}))
+		defer server.Close()
+
+		p := newPod()
+		markIncomplete(p)
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+		got, err := e.Observe(context.Background(), p)
+		if err != nil {
+			t.Fatalf("Observe() error = %v", err)
+		}
+		if got.ResourceExists {
+			t.Fatal("Observe() ResourceExists = true, want false")
+		}
+		if meta.GetExternalName(p) != "" {
+			t.Fatalf("Observe() external-name = %q, want empty", meta.GetExternalName(p))
+		}
+	})
+
+	t.Run("SingleMatchAdoptsAndLateInitializes", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/pods" {
+				t.Fatalf("unexpected path: %s", r.URL.Path)
+			}
+			_ = json.NewEncoder(w).Encode([]runpodclient.PodResponse{
+				{ID: "pod-recovered", Name: derivedName, Image: image, DesiredStatus: "RUNNING"},
+			})
+		}))
+		defer server.Close()
+
+		p := newPod()
+		markIncomplete(p)
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard(), probeHTTP: stubProbe(true)}
+		got, err := e.Observe(context.Background(), p)
+		if err != nil {
+			t.Fatalf("Observe() error = %v", err)
+		}
+		if !got.ResourceExists {
+			t.Fatal("Observe() ResourceExists = false, want true")
+		}
+		if !got.ResourceLateInitialized {
+			t.Fatal("Observe() ResourceLateInitialized = false, want true (must persist the adopted external-name)")
+		}
+		if meta.GetExternalName(p) != "pod-recovered" {
+			t.Fatalf("Observe() external-name = %q, want %q", meta.GetExternalName(p), "pod-recovered")
+		}
+	})
+
+	t.Run("MultipleMatchesReturnsError", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode([]runpodclient.PodResponse{
+				{ID: "pod-a", Name: derivedName, Image: image},
+				{ID: "pod-b", Name: derivedName, Image: image},
+			})
+		}))
+		defer server.Close()
+
+		p := newPod()
+		markIncomplete(p)
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+		_, err := e.Observe(context.Background(), p)
+		if err == nil {
+			t.Fatal("Observe() error = nil, want non-nil")
+		}
+		if !strings.Contains(err.Error(), errAmbiguousCreate) {
+			t.Fatalf("Observe() error = %q, want it to mention %q", err.Error(), errAmbiguousCreate)
+		}
+		if meta.GetExternalName(p) != "" {
+			t.Fatalf("Observe() external-name = %q, want empty (must not guess)", meta.GetExternalName(p))
+		}
+	})
+
+	t.Run("IdentityMismatchReturnsErrorAndDoesNotAdopt", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode([]runpodclient.PodResponse{
+				// Same derived name, but a different image: this must never
+				// be silently adopted, even though the name matches exactly.
+				{ID: "pod-wrong-image", Name: derivedName, Image: "some/other-image:latest"},
+			})
+		}))
+		defer server.Close()
+
+		p := newPod()
+		markIncomplete(p)
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+		_, err := e.Observe(context.Background(), p)
+		if err == nil {
+			t.Fatal("Observe() error = nil, want non-nil")
+		}
+		if !strings.Contains(err.Error(), errAmbiguousCreate) {
+			t.Fatalf("Observe() error = %q, want it to mention %q", err.Error(), errAmbiguousCreate)
+		}
+		if meta.GetExternalName(p) != "" {
+			t.Fatalf("Observe() external-name = %q, want empty (must not adopt on identity mismatch)", meta.GetExternalName(p))
+		}
+	})
+}
+
+// TestHasMutableDriftIgnoresDerivedNameSuffix confirms that the deterministic
+// -uid8 suffix appended to the name sent on create never surfaces as drift:
+// hasMutableDrift never compares against a pod's name in the first place, so
+// the response's name is free to include the suffix (or anything else)
+// without affecting up-to-date evaluation.
+func TestHasMutableDriftIgnoresDerivedNameSuffix(t *testing.T) {
+	image := "runpod/image:latest"
+	spec := v1alpha1.PodParameters{ImageName: &image}
+	response := &runpodclient.PodResponse{Name: "vllm-test-550e8400", Image: image}
+
+	if hasMutableDrift(spec, response) {
+		t.Fatal("hasMutableDrift() = true, want false: the derived-name suffix must never be reported as drift")
+	}
 }
 
 func TestDelete(t *testing.T) {

@@ -238,6 +238,20 @@ spec:
     containerDiskInGb: 30
 ```
 
+## Create recovery
+
+`Pod` and `Endpoint` send RunPod a name of `<metadata.name>-<uid8>` on
+create, where `uid8` is the first 8 characters of the resource's Kubernetes
+UID — so it appears with this suffix in the RunPod console. This makes the
+name deterministic and reproducible across reconciles: if the controller
+crashes or loses its API server connection between the create call and
+recording the resulting ID, the next reconcile lists pods/endpoints, finds
+the one already created under that exact name, and adopts it instead of
+either creating a duplicate (double billing) or refusing to proceed forever.
+Adoption requires the image/GPU (Pod) or template/image (Endpoint) to also
+match the spec; if more than one resource carries the name, or the identity
+fields don't match, the reconciler reports an error rather than guessing.
+
 ## Docs
 
 - `docs/local-testing.md` — local kind/Crossplane smoke harness

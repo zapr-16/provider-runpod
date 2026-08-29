@@ -202,6 +202,21 @@ func (c *Client) GetEndpoint(ctx context.Context, endpointID string) (*EndpointR
 	return &out, true, nil
 }
 
+// ListEndpoints retrieves every serverless endpoint visible to the
+// configured API key (GET /endpoints). It exists only to support
+// ambiguous-create recovery: the endpoint controller's Observe lists and
+// matches on the deterministic create name when it cannot tell whether a
+// prior Create call ever reached RunPod (meta.ExternalCreateIncomplete). It
+// is never called on the normal Observe path, which always has an
+// external-name to GET directly.
+func (c *Client) ListEndpoints(ctx context.Context) ([]EndpointResponse, error) {
+	var out []EndpointResponse
+	if _, err := c.getStrict(ctx, endpointsPath, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // UpdateEndpoint patches mutable fields of a RunPod serverless endpoint.
 func (c *Client) UpdateEndpoint(ctx context.Context, endpointID string, payload UpdateEndpointRequest) error {
 	if err := validateResourceID(endpointID); err != nil {

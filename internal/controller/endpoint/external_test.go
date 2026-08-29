@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
@@ -631,6 +632,198 @@ func TestCreate(t *testing.T) {
 			t.Fatal("Create() connection details missing endpointId")
 		}
 	})
+
+	t.Run("SendsNameWithUIDSuffixForDeterministicRecovery", func(t *testing.T) {
+		var gotEndpoint runpodclient.CreateEndpointRequest
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodPost && r.URL.Path == "/endpoints" {
+				_ = json.NewDecoder(r.Body).Decode(&gotEndpoint)
+				_ = json.NewEncoder(w).Encode(map[string]string{"id": "ep-created"})
+				return
+			}
+			t.Fatalf("unexpected request: %q %q", r.Method, r.URL.Path)
+		}))
+		defer server.Close()
+
+		ep := &v1alpha1.Endpoint{
+			ObjectMeta: metav1.ObjectMeta{Name: "vllm-from-template", UID: "550e8400-e29b-41d4-a716-446655440000"},
+			Spec: v1alpha1.EndpointSpec{ForProvider: v1alpha1.EndpointParameters{
+				TemplateID: ptrString("tpl-ext"),
+			}},
+		}
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+		if _, err := e.Create(context.Background(), ep); err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+
+		want := "vllm-from-template-550e8400"
+		if gotEndpoint.Name == nil || *gotEndpoint.Name != want {
+			t.Fatalf("Create() endpoint name = %#v, want %q", gotEndpoint.Name, want)
+		}
+	})
+}
+
+// TestObserveAdoptsIncompleteCreate covers Observe()'s ambiguous-create
+// recovery: an empty external-name annotation combined with
+// meta.ExternalCreateIncomplete means a prior Create's result was never
+// confirmed, so Observe must list endpoints and match on the deterministic
+// create name instead of blindly reporting the resource missing (which
+// would let the reconciler retry Create and orphan an already-billing
+// endpoint).
+func TestObserveAdoptsIncompleteCreate(t *testing.T) {
+	newEndpoint := func() *v1alpha1.Endpoint {
+		return &v1alpha1.Endpoint{
+			ObjectMeta: metav1.ObjectMeta{Name: "vllm-small", UID: "550e8400-e29b-41d4-a716-446655440000"},
+			Spec:       v1alpha1.EndpointSpec{ForProvider: v1alpha1.EndpointParameters{TemplateID: ptrString("tpl-xyz")}},
+		}
+	}
+	markIncomplete := func(ep *v1alpha1.Endpoint) {
+		meta.SetExternalCreatePending(ep, time.Now())
+	}
+	derivedName := "vllm-small-550e8400"
+
+	t.Run("NoIncompleteCreateSkipsListCall", func(t *testing.T) {
+		var calls int
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+		}))
+		defer server.Close()
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+		got, err := e.Observe(context.Background(), newEndpoint())
+		if err != nil {
+			t.Fatalf("Observe() error = %v", err)
+		}
+		if got.ResourceExists {
+			t.Fatal("Observe() ResourceExists = true, want false")
+		}
+		if calls != 0 {
+			t.Fatalf("Observe() made %d HTTP calls, want 0 (happy path never lists)", calls)
+		}
+	})
+
+	t.Run("ZeroMatchesReportsNotExists", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/endpoints" {
+				t.Fatalf("unexpected path: %s", r.URL.Path)
+			}
+			_, _ = w.Write([]byte(`[{"id":"ep-other","name":"unrelated"}]`))
+		}))
+		defer server.Close()
+
+		ep := newEndpoint()
+		markIncomplete(ep)
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+		got, err := e.Observe(context.Background(), ep)
+		if err != nil {
+			t.Fatalf("Observe() error = %v", err)
+		}
+		if got.ResourceExists {
+			t.Fatal("Observe() ResourceExists = true, want false")
+		}
+		if meta.GetExternalName(ep) != "" {
+			t.Fatalf("Observe() external-name = %q, want empty", meta.GetExternalName(ep))
+		}
+	})
+
+	t.Run("SingleMatchAdoptsAndLateInitializes", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/endpoints" {
+				t.Fatalf("unexpected path: %s", r.URL.Path)
+			}
+			_ = json.NewEncoder(w).Encode([]runpodclient.EndpointResponse{
+				{ID: "ep-recovered", Name: derivedName, TemplateID: "tpl-xyz"},
+			})
+		}))
+		defer server.Close()
+
+		ep := newEndpoint()
+		markIncomplete(ep)
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+		got, err := e.Observe(context.Background(), ep)
+		if err != nil {
+			t.Fatalf("Observe() error = %v", err)
+		}
+		if !got.ResourceExists {
+			t.Fatal("Observe() ResourceExists = false, want true")
+		}
+		if !got.ResourceLateInitialized {
+			t.Fatal("Observe() ResourceLateInitialized = false, want true (must persist the adopted external-name)")
+		}
+		if meta.GetExternalName(ep) != "ep-recovered" {
+			t.Fatalf("Observe() external-name = %q, want %q", meta.GetExternalName(ep), "ep-recovered")
+		}
+	})
+
+	t.Run("MultipleMatchesReturnsError", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode([]runpodclient.EndpointResponse{
+				{ID: "ep-a", Name: derivedName, TemplateID: "tpl-xyz"},
+				{ID: "ep-b", Name: derivedName, TemplateID: "tpl-xyz"},
+			})
+		}))
+		defer server.Close()
+
+		ep := newEndpoint()
+		markIncomplete(ep)
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+		_, err := e.Observe(context.Background(), ep)
+		if err == nil {
+			t.Fatal("Observe() error = nil, want non-nil")
+		}
+		if !strings.Contains(err.Error(), errAmbiguousCreate) {
+			t.Fatalf("Observe() error = %q, want it to mention %q", err.Error(), errAmbiguousCreate)
+		}
+		if meta.GetExternalName(ep) != "" {
+			t.Fatalf("Observe() external-name = %q, want empty (must not guess)", meta.GetExternalName(ep))
+		}
+	})
+
+	t.Run("IdentityMismatchReturnsErrorAndDoesNotAdopt", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode([]runpodclient.EndpointResponse{
+				// Same derived name, but a different template: this must
+				// never be silently adopted, even though the name matches
+				// exactly.
+				{ID: "ep-wrong-template", Name: derivedName, TemplateID: "tpl-other"},
+			})
+		}))
+		defer server.Close()
+
+		ep := newEndpoint()
+		markIncomplete(ep)
+
+		e := &external{client: newTestClient(t, server), log: logr.Discard()}
+		_, err := e.Observe(context.Background(), ep)
+		if err == nil {
+			t.Fatal("Observe() error = nil, want non-nil")
+		}
+		if !strings.Contains(err.Error(), errAmbiguousCreate) {
+			t.Fatalf("Observe() error = %q, want it to mention %q", err.Error(), errAmbiguousCreate)
+		}
+		if meta.GetExternalName(ep) != "" {
+			t.Fatalf("Observe() external-name = %q, want empty (must not adopt on identity mismatch)", meta.GetExternalName(ep))
+		}
+	})
+}
+
+// TestHasEndpointDriftIgnoresDerivedNameSuffix confirms that the
+// deterministic -uid8 suffix appended to the name sent on create never
+// surfaces as drift: hasEndpointDrift never compares against an endpoint's
+// name in the first place, so the response's name is free to include the
+// suffix (or anything else) without affecting up-to-date evaluation.
+func TestHasEndpointDriftIgnoresDerivedNameSuffix(t *testing.T) {
+	spec := matchingSpec()
+	response := readyResponse()
+	response.Name = "vllm-small-550e8400"
+
+	if hasEndpointDrift(spec, response) {
+		t.Fatal("hasEndpointDrift() = true, want false: the derived-name suffix must never be reported as drift")
+	}
 }
 
 func TestUpdate(t *testing.T) {

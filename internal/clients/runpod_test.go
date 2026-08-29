@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -77,5 +78,73 @@ func TestPingServerErrorReturnsError(t *testing.T) {
 	c := NewClient("some-key", WithBaseURL(srv.URL))
 	if err := c.Ping(context.Background()); err == nil {
 		t.Fatal("Ping() error = nil, want non-nil")
+	}
+}
+
+// TestListPods covers ListPods, used only by the pod controller's
+// ambiguous-create recovery path (adoptIncompleteCreate) to find a pod
+// created under a deterministic name whose result was never confirmed.
+func TestListPods(t *testing.T) {
+	tests := map[string]struct {
+		statusCode int
+		body       string
+		want       []PodResponse
+		wantErr    bool
+	}{
+		"HappyPathReturnsAllPods": {
+			statusCode: http.StatusOK,
+			body:       `[{"id":"pod-1","name":"vllm-small-aabbccdd"},{"id":"pod-2","name":"other"}]`,
+			want: []PodResponse{
+				{ID: "pod-1", Name: "vllm-small-aabbccdd"},
+				{ID: "pod-2", Name: "other"},
+			},
+		},
+		"EmptyListReturnsEmptyNoError": {
+			statusCode: http.StatusOK,
+			body:       `[]`,
+			want:       []PodResponse{},
+		},
+		"NotFoundReturnsEmptyNoError": {
+			// A list endpoint has no natural "not found" case; treat 404 the
+			// same as an empty list rather than surfacing it as an error.
+			statusCode: http.StatusNotFound,
+			want:       nil,
+		},
+		"ServerErrorReturnsError": {
+			statusCode: http.StatusInternalServerError,
+			wantErr:    true,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			var gotMethod, gotPath string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotMethod, gotPath = r.Method, r.URL.Path
+				w.WriteHeader(tc.statusCode)
+				if tc.body != "" {
+					_, _ = w.Write([]byte(tc.body))
+				}
+			}))
+			defer srv.Close()
+
+			c := NewClient("key", WithBaseURL(srv.URL))
+			got, err := c.ListPods(context.Background())
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("ListPods() error = nil, want non-nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ListPods() error = %v", err)
+			}
+			if gotMethod != http.MethodGet || gotPath != "/pods" {
+				t.Fatalf("got %s %s, want GET /pods", gotMethod, gotPath)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("ListPods() = %#v, want %#v", got, tc.want)
+			}
+		})
 	}
 }

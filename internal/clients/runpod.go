@@ -109,6 +109,7 @@ type UpdatePodRequest struct {
 // PodResponse mirrors the subset of the RunPod Pod GET response needed by Observe().
 type PodResponse struct {
 	ID                      string            `json:"id"`
+	Name                    string            `json:"name"`
 	DesiredStatus           string            `json:"desiredStatus"`
 	PublicIP                string            `json:"publicIp"`
 	PortMappings            map[string]int32  `json:"portMappings"`
@@ -125,6 +126,7 @@ type PodResponse struct {
 	Locked                  bool              `json:"locked"`
 	Interruptible           bool              `json:"interruptible"`
 	ContainerRegistryAuthID string            `json:"containerRegistryAuthId"`
+	CPUFlavorID             string            `json:"cpuFlavorId"`
 	GPU                     struct {
 		DisplayName string `json:"displayName"`
 	} `json:"gpu"`
@@ -250,6 +252,20 @@ func (c *Client) GetPod(ctx context.Context, podID string) (*PodResponse, bool, 
 		return nil, found, err
 	}
 	return &out, true, nil
+}
+
+// ListPods retrieves every pod visible to the configured API key (GET
+// /pods). It exists only to support ambiguous-create recovery: the pod
+// controller's Observe lists and matches on the deterministic create name
+// when it cannot tell whether a prior Create call ever reached RunPod
+// (meta.ExternalCreateIncomplete). It is never called on the normal Observe
+// path, which always has an external-name to GET directly.
+func (c *Client) ListPods(ctx context.Context) ([]PodResponse, error) {
+	var out []PodResponse
+	if _, err := c.getStrict(ctx, podsPath, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // CreatePod creates a new RunPod pod and returns its pod ID.

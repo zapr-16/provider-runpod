@@ -57,3 +57,30 @@ func CloneStrings(in []string) []string {
 	copy(out, in)
 	return out
 }
+
+// derivedNameSuffixLen is the number of UID characters appended to a
+// resource's base name. Kubernetes UIDs are UUIDs, whose first 8 characters
+// are already hex digits ahead of the first hyphen, so this is a plain
+// prefix of the UID string rather than a hash or re-encoding.
+const derivedNameSuffixLen = 8
+
+// DerivedName returns the deterministic name a managed resource sends to the
+// RunPod API on create: base (the current name source - a spec name field if
+// one exists, or metadata.name otherwise) with "-" plus the first 8 hex
+// characters of the resource's Kubernetes UID appended. RunPod create calls
+// are not idempotent and bill real GPUs; making the name deterministic lets
+// a controller safely recover from a create whose result was never
+// persisted (crash or restart between the POST and the external-name
+// annotation write) by listing and matching on this exact name, instead of
+// either leaking the resource or guessing whether it is safe to retry.
+// uid is empty in unit tests that never set ObjectMeta.UID, in which case
+// the base name is returned unchanged.
+func DerivedName(base, uid string) string {
+	if uid == "" {
+		return base
+	}
+	if len(uid) > derivedNameSuffixLen {
+		uid = uid[:derivedNameSuffixLen]
+	}
+	return base + "-" + uid
+}

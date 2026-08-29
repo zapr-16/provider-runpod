@@ -106,6 +106,15 @@ func Gated(gate xpcontroller.Gate, gvk schema.GroupVersionKind, log logr.Logger,
 // interval, feature flags, rate limiting, metric recorders, and the
 // safe-start gate shared by every kind in this provider; every option is
 // wired here once instead of being repeated at each call site.
+// deterministicExternalName must be true only for kinds whose external
+// client always sends a deterministic create name (currently Pod and
+// Endpoint; see fieldcmp.DerivedName). It is threaded straight into
+// managed.WithDeterministicExternalName, which controls whether the
+// reconciler is willing to retry Create after a prior attempt's outcome
+// went unrecorded (meta.ExternalCreateIncomplete) instead of refusing to
+// proceed forever: with a non-deterministic name that retry could silently
+// double-create and orphan a billed resource, so it must stay false for any
+// kind whose external client does not guarantee a deterministic name.
 //
 // When o.Gate is set, controller registration is deferred until the kind's
 // CustomResourceDefinition is Established, so the provider can start (and
@@ -113,7 +122,7 @@ func Gated(gate xpcontroller.Gate, gvk schema.GroupVersionKind, log logr.Logger,
 // fails once the gate releases it, there is no synchronous caller left to
 // report the error to, so it is treated as fatal, matching how every other
 // setup failure in this provider is handled at startup.
-func ManagedController(mgr ctrl.Manager, kind string, obj client.Object, list xpresource.ManagedList, conn managed.ExternalConnector, log logr.Logger, o xpcontroller.Options) error {
+func ManagedController(mgr ctrl.Manager, kind string, obj client.Object, list xpresource.ManagedList, conn managed.ExternalConnector, log logr.Logger, o xpcontroller.Options, deterministicExternalName bool) error {
 	gvk := v1alpha1.SchemeGroupVersion.WithKind(kind)
 	name := xpresource.ManagedKind(gvk)
 
@@ -122,6 +131,7 @@ func ManagedController(mgr ctrl.Manager, kind string, obj client.Object, list xp
 			managed.WithExternalConnector(conn),
 			managed.WithLogger(logging.NewLogrLogger(log)),
 			managed.WithPollInterval(o.PollInterval),
+			managed.WithDeterministicExternalName(deterministicExternalName),
 		}
 		if o.Features.Enabled(feature.EnableBetaManagementPolicies) {
 			ropts = append(ropts, managed.WithManagementPolicies())

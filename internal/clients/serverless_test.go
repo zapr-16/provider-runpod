@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 )
 
@@ -265,6 +266,71 @@ func TestDeleteTemplateRejectsInvalidID(t *testing.T) {
 	c := NewClient("key")
 	if err := c.DeleteTemplate(context.Background(), "a/b"); err == nil {
 		t.Fatal("want error for invalid template ID")
+	}
+}
+
+func TestListEndpoints(t *testing.T) {
+	tests := map[string]struct {
+		statusCode int
+		body       string
+		want       []EndpointResponse
+		wantErr    bool
+	}{
+		"HappyPathReturnsAllEndpoints": {
+			statusCode: http.StatusOK,
+			body:       `[{"id":"ep-1","name":"vllm-small-aabbccdd"},{"id":"ep-2","name":"other"}]`,
+			want: []EndpointResponse{
+				{ID: "ep-1", Name: "vllm-small-aabbccdd"},
+				{ID: "ep-2", Name: "other"},
+			},
+		},
+		"EmptyListReturnsEmptyNoError": {
+			statusCode: http.StatusOK,
+			body:       `[]`,
+			want:       []EndpointResponse{},
+		},
+		"NotFoundReturnsEmptyNoError": {
+			// A list endpoint has no natural "not found" case; treat 404 the
+			// same as an empty list rather than surfacing it as an error.
+			statusCode: http.StatusNotFound,
+			want:       nil,
+		},
+		"ServerErrorReturnsError": {
+			statusCode: http.StatusInternalServerError,
+			wantErr:    true,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			var gotMethod, gotPath string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotMethod, gotPath = r.Method, r.URL.Path
+				w.WriteHeader(tc.statusCode)
+				if tc.body != "" {
+					_, _ = w.Write([]byte(tc.body))
+				}
+			}))
+			defer srv.Close()
+
+			c := NewClient("key", WithBaseURL(srv.URL))
+			got, err := c.ListEndpoints(context.Background())
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("ListEndpoints() error = nil, want non-nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ListEndpoints() error = %v", err)
+			}
+			if gotMethod != http.MethodGet || gotPath != "/endpoints" {
+				t.Fatalf("got %s %s, want GET /endpoints", gotMethod, gotPath)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("ListEndpoints() = %#v, want %#v", got, tc.want)
+			}
+		})
 	}
 }
 
