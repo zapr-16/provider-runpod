@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	xpresource "github.com/crossplane/crossplane-runtime/v2/pkg/resource"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -17,6 +17,7 @@ import (
 
 	v1alpha1 "github.com/zapr-16/provider-runpod/apis/v1alpha1"
 	v1beta1 "github.com/zapr-16/provider-runpod/apis/v1beta1"
+	"github.com/zapr-16/provider-runpod/internal/controller/register"
 )
 
 func testScheme(t *testing.T) *runtime.Scheme {
@@ -63,10 +64,13 @@ func TestConnectTracksProviderConfigUsage(t *testing.T) {
 	pod.SetProviderConfigReference(&xpv2.ProviderConfigReference{Name: "default", Kind: v1beta1.ClusterProviderConfigKind})
 
 	kube := fake.NewClientBuilder().WithScheme(s).WithObjects(secret, pc).Build()
-	c := &connector{
-		kube:  kube,
-		usage: xpresource.NewProviderConfigUsageTracker(kube, &v1beta1.ProviderConfigUsage{}),
-		log:   logr.Discard(),
+	c := &register.Connector[*v1alpha1.Pod]{
+		Kube:                     kube,
+		Usage:                    xpresource.NewProviderConfigUsageTracker(kube, &v1beta1.ProviderConfigUsage{}),
+		Log:                      logr.Discard(),
+		ErrNotKind:               errNotPod,
+		ErrMissingProviderConfig: errMissingProviderConfig,
+		NewExternal:              newExternal,
 	}
 
 	if _, err := c.Connect(context.Background(), pod); err != nil {
@@ -120,10 +124,13 @@ func TestConnectDefaultsEmptyKindToClusterProviderConfig(t *testing.T) {
 	pod.SetProviderConfigReference(&xpv2.ProviderConfigReference{Name: "default"})
 
 	kube := fake.NewClientBuilder().WithScheme(s).WithObjects(secret, pc).Build()
-	c := &connector{
-		kube:  kube,
-		usage: xpresource.NewProviderConfigUsageTracker(kube, &v1beta1.ProviderConfigUsage{}),
-		log:   logr.Discard(),
+	c := &register.Connector[*v1alpha1.Pod]{
+		Kube:                     kube,
+		Usage:                    xpresource.NewProviderConfigUsageTracker(kube, &v1beta1.ProviderConfigUsage{}),
+		Log:                      logr.Discard(),
+		ErrNotKind:               errNotPod,
+		ErrMissingProviderConfig: errMissingProviderConfig,
+		NewExternal:              newExternal,
 	}
 
 	if _, err := c.Connect(context.Background(), pod); err != nil {
@@ -175,10 +182,13 @@ func TestConnectResolvesNamespacedProviderConfig(t *testing.T) {
 	pod.SetProviderConfigReference(&xpv2.ProviderConfigReference{Name: "team-config", Kind: v1beta1.ProviderConfigKind})
 
 	kube := fake.NewClientBuilder().WithScheme(s).WithObjects(decoySecret, secretInPCNamespace, pc).Build()
-	c := &connector{
-		kube:  kube,
-		usage: xpresource.NewProviderConfigUsageTracker(kube, &v1beta1.ProviderConfigUsage{}),
-		log:   logr.Discard(),
+	c := &register.Connector[*v1alpha1.Pod]{
+		Kube:                     kube,
+		Usage:                    xpresource.NewProviderConfigUsageTracker(kube, &v1beta1.ProviderConfigUsage{}),
+		Log:                      logr.Discard(),
+		ErrNotKind:               errNotPod,
+		ErrMissingProviderConfig: errMissingProviderConfig,
+		NewExternal:              newExternal,
 	}
 
 	if _, err := c.Connect(context.Background(), pod); err != nil {
@@ -215,10 +225,13 @@ func TestConnectNamespacedProviderConfigCannotUseSecretFromAnotherNamespace(t *t
 	pod.SetProviderConfigReference(&xpv2.ProviderConfigReference{Name: "team-config", Kind: v1beta1.ProviderConfigKind})
 
 	kube := fake.NewClientBuilder().WithScheme(s).WithObjects(otherNamespaceSecret, pc).Build()
-	c := &connector{
-		kube:  kube,
-		usage: xpresource.NewProviderConfigUsageTracker(kube, &v1beta1.ProviderConfigUsage{}),
-		log:   logr.Discard(),
+	c := &register.Connector[*v1alpha1.Pod]{
+		Kube:                     kube,
+		Usage:                    xpresource.NewProviderConfigUsageTracker(kube, &v1beta1.ProviderConfigUsage{}),
+		Log:                      logr.Discard(),
+		ErrNotKind:               errNotPod,
+		ErrMissingProviderConfig: errMissingProviderConfig,
+		NewExternal:              newExternal,
 	}
 
 	if _, err := c.Connect(context.Background(), pod); err == nil {
@@ -228,10 +241,13 @@ func TestConnectNamespacedProviderConfigCannotUseSecretFromAnotherNamespace(t *t
 
 func TestConnectUnsupportedKindReturnsError(t *testing.T) {
 	kube := fake.NewClientBuilder().WithScheme(testScheme(t)).Build()
-	c := &connector{
-		kube:  kube,
-		usage: xpresource.NewProviderConfigUsageTracker(kube, &v1beta1.ProviderConfigUsage{}),
-		log:   logr.Discard(),
+	c := &register.Connector[*v1alpha1.Pod]{
+		Kube:                     kube,
+		Usage:                    xpresource.NewProviderConfigUsageTracker(kube, &v1beta1.ProviderConfigUsage{}),
+		Log:                      logr.Discard(),
+		ErrNotKind:               errNotPod,
+		ErrMissingProviderConfig: errMissingProviderConfig,
+		NewExternal:              newExternal,
 	}
 
 	pod := &v1alpha1.Pod{
@@ -251,10 +267,13 @@ func TestConnectUnsupportedKindReturnsError(t *testing.T) {
 
 func TestConnectMissingProviderConfigRefReturnsError(t *testing.T) {
 	kube := fake.NewClientBuilder().WithScheme(testScheme(t)).Build()
-	c := &connector{
-		kube:  kube,
-		usage: xpresource.NewProviderConfigUsageTracker(kube, &v1beta1.ProviderConfigUsage{}),
-		log:   logr.Discard(),
+	c := &register.Connector[*v1alpha1.Pod]{
+		Kube:                     kube,
+		Usage:                    xpresource.NewProviderConfigUsageTracker(kube, &v1beta1.ProviderConfigUsage{}),
+		Log:                      logr.Discard(),
+		ErrNotKind:               errNotPod,
+		ErrMissingProviderConfig: errMissingProviderConfig,
+		NewExternal:              newExternal,
 	}
 
 	_, err := c.Connect(context.Background(), &v1alpha1.Pod{})

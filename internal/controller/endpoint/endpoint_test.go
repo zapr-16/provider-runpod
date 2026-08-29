@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	xpresource "github.com/crossplane/crossplane-runtime/v2/pkg/resource"
+	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -16,6 +16,7 @@ import (
 
 	v1alpha1 "github.com/zapr-16/provider-runpod/apis/v1alpha1"
 	v1beta1 "github.com/zapr-16/provider-runpod/apis/v1beta1"
+	"github.com/zapr-16/provider-runpod/internal/controller/register"
 )
 
 func TestConnectTracksProviderConfigUsage(t *testing.T) {
@@ -51,10 +52,13 @@ func TestConnectTracksProviderConfigUsage(t *testing.T) {
 	ep.SetProviderConfigReference(&xpv2.ProviderConfigReference{Name: "default", Kind: v1beta1.ClusterProviderConfigKind})
 
 	kube := fake.NewClientBuilder().WithScheme(s).WithObjects(secret, pc).Build()
-	c := &connector{
-		kube:  kube,
-		usage: xpresource.NewProviderConfigUsageTracker(kube, &v1beta1.ProviderConfigUsage{}),
-		log:   logr.Discard(),
+	c := &register.Connector[*v1alpha1.Endpoint]{
+		Kube:                     kube,
+		Usage:                    xpresource.NewProviderConfigUsageTracker(kube, &v1beta1.ProviderConfigUsage{}),
+		Log:                      logr.Discard(),
+		ErrNotKind:               errNotEndpoint,
+		ErrMissingProviderConfig: errMissingProviderConfig,
+		NewExternal:              newExternal,
 	}
 
 	if _, err := c.Connect(context.Background(), ep); err != nil {
@@ -142,10 +146,13 @@ func TestConnectDefaultsEmptyKindAndResolvesNamespacedConfig(t *testing.T) {
 			ep.SetProviderConfigReference(tc.ref)
 
 			kube := fake.NewClientBuilder().WithScheme(s).WithObjects(secret, namespacedSecret, clusterPC, namespacedPC).Build()
-			c := &connector{
-				kube:  kube,
-				usage: xpresource.NewProviderConfigUsageTracker(kube, &v1beta1.ProviderConfigUsage{}),
-				log:   logr.Discard(),
+			c := &register.Connector[*v1alpha1.Endpoint]{
+				Kube:                     kube,
+				Usage:                    xpresource.NewProviderConfigUsageTracker(kube, &v1beta1.ProviderConfigUsage{}),
+				Log:                      logr.Discard(),
+				ErrNotKind:               errNotEndpoint,
+				ErrMissingProviderConfig: errMissingProviderConfig,
+				NewExternal:              newExternal,
 			}
 
 			if _, err := c.Connect(context.Background(), ep); err != nil {

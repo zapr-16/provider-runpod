@@ -19,6 +19,7 @@ import (
 
 	v1alpha1 "github.com/zapr-16/provider-runpod/apis/v1alpha1"
 	runpodclient "github.com/zapr-16/provider-runpod/internal/clients"
+	"github.com/zapr-16/provider-runpod/internal/controller/fieldcmp"
 )
 
 const (
@@ -202,29 +203,29 @@ func (e *external) Create(ctx context.Context, mg xpresource.Managed) (managed.E
 	req := runpodclient.CreatePodRequest{
 		Name:                    &name,
 		ImageName:               spec.ImageName,
-		GPUTypeIDs:              cloneStrings(spec.GPUTypeIDs),
+		GPUTypeIDs:              fieldcmp.CloneStrings(spec.GPUTypeIDs),
 		GPUCount:                spec.GPUCount,
 		SupportPublicIP:         spec.SupportPublicIP,
 		ContainerDiskInGb:       spec.ContainerDiskInGb,
 		VolumeInGb:              spec.VolumeInGb,
 		VolumeMountPath:         spec.VolumeMountPath,
-		Env:                     buildEnvMap(spec.Env),
+		Env:                     fieldcmp.BuildEnvMap(spec.Env),
 		Ports:                   buildPortTokens(spec.Ports),
-		DockerStartCmd:          cloneStrings(spec.DockerStartCmd),
-		DockerEntrypoint:        cloneStrings(spec.DockerEntrypoint),
+		DockerStartCmd:          fieldcmp.CloneStrings(spec.DockerStartCmd),
+		DockerEntrypoint:        fieldcmp.CloneStrings(spec.DockerEntrypoint),
 		ComputeType:             spec.ComputeType,
 		VCPUCount:               spec.VCPUCount,
-		CPUFlavorIDs:            cloneStrings(spec.CPUFlavorIDs),
+		CPUFlavorIDs:            fieldcmp.CloneStrings(spec.CPUFlavorIDs),
 		CPUFlavorPriority:       spec.CPUFlavorPriority,
-		DataCenterIDs:           cloneStrings(spec.DataCenterIDs),
+		DataCenterIDs:           fieldcmp.CloneStrings(spec.DataCenterIDs),
 		DataCenterPriority:      spec.DataCenterPriority,
 		GPUTypePriority:         spec.GPUTypePriority,
-		CountryCodes:            cloneStrings(spec.CountryCodes),
+		CountryCodes:            fieldcmp.CloneStrings(spec.CountryCodes),
 		Interruptible:           spec.Interruptible,
 		Locked:                  spec.Locked,
 		GlobalNetworking:        spec.GlobalNetworking,
 		VolumeEncrypted:         spec.VolumeEncrypted,
-		AllowedCudaVersions:     cloneStrings(spec.AllowedCudaVersions),
+		AllowedCudaVersions:     fieldcmp.CloneStrings(spec.AllowedCudaVersions),
 		MinRAMPerGPU:            spec.MinRAMPerGPU,
 		MinVCPUPerGPU:           spec.MinVCPUPerGPU,
 		MinDiskBandwidthMBps:    spec.MinDiskBandwidthMBps,
@@ -278,10 +279,10 @@ func (e *external) Update(ctx context.Context, mg xpresource.Managed) (managed.E
 			ContainerDiskInGb:       spec.ContainerDiskInGb,
 			VolumeInGb:              spec.VolumeInGb,
 			VolumeMountPath:         spec.VolumeMountPath,
-			Env:                     buildEnvMap(spec.Env),
+			Env:                     fieldcmp.BuildEnvMap(spec.Env),
 			Ports:                   buildPortTokens(spec.Ports),
-			DockerStartCmd:          cloneStrings(spec.DockerStartCmd),
-			DockerEntrypoint:        cloneStrings(spec.DockerEntrypoint),
+			DockerStartCmd:          fieldcmp.CloneStrings(spec.DockerStartCmd),
+			DockerEntrypoint:        fieldcmp.CloneStrings(spec.DockerEntrypoint),
 			Locked:                  spec.Locked,
 			GlobalNetworking:        spec.GlobalNetworking,
 			ContainerRegistryAuthID: spec.ContainerRegistryAuthID,
@@ -340,7 +341,7 @@ func hasEnvDrift(desired []v1alpha1.EnvVar, observed map[string]string) bool {
 		want[env.Name] = env.Value
 	}
 
-	return !stringMapsEqual(want, observed)
+	return !fieldcmp.StringMapsEqual(want, observed)
 }
 
 // hasPortsDrift reports whether declared ports diverge from the running
@@ -472,10 +473,10 @@ func hasMutableDrift(spec v1alpha1.PodParameters, r *runpodclient.PodResponse) b
 	if spec.ContainerRegistryAuthID != nil && *spec.ContainerRegistryAuthID != r.ContainerRegistryAuthID {
 		return true
 	}
-	if len(spec.DockerStartCmd) > 0 && !stringSlicesEqual(spec.DockerStartCmd, r.DockerStartCmd) {
+	if len(spec.DockerStartCmd) > 0 && !fieldcmp.StringSlicesEqual(spec.DockerStartCmd, r.DockerStartCmd) {
 		return true
 	}
-	if len(spec.DockerEntrypoint) > 0 && !stringSlicesEqual(spec.DockerEntrypoint, r.DockerEntrypoint) {
+	if len(spec.DockerEntrypoint) > 0 && !fieldcmp.StringSlicesEqual(spec.DockerEntrypoint, r.DockerEntrypoint) {
 		return true
 	}
 	// globalNetworking is write-only (never echoed) and excluded, like
@@ -516,30 +517,6 @@ func hasLifecycleDrift(spec v1alpha1.PodParameters, observedStatus string) bool 
 	return desiredStateOrDefault(spec) != observedStatus
 }
 
-func stringSlicesEqual(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func stringMapsEqual(a, b map[string]string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for k, av := range a {
-		if bv, ok := b[k]; !ok || bv != av {
-			return false
-		}
-	}
-	return true
-}
-
 func stringSetEqual(a, b map[string]struct{}) bool {
 	if len(a) != len(b) {
 		return false
@@ -568,18 +545,6 @@ func clonePortMappings(in map[string]int32) map[string]int32 {
 	return out
 }
 
-func buildEnvMap(in []v1alpha1.EnvVar) map[string]string {
-	if len(in) == 0 {
-		return nil
-	}
-
-	out := make(map[string]string, len(in))
-	for _, env := range in {
-		out[env.Name] = env.Value
-	}
-	return out
-}
-
 func buildPortTokens(in []v1alpha1.Port) []string {
 	if len(in) == 0 {
 		return nil
@@ -589,14 +554,5 @@ func buildPortTokens(in []v1alpha1.Port) []string {
 	for _, port := range in {
 		out = append(out, normalizePortToken(port.Number, port.Protocol))
 	}
-	return out
-}
-
-func cloneStrings(in []string) []string {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]string, len(in))
-	copy(out, in)
 	return out
 }
