@@ -42,5 +42,10 @@ func Setup(mgr ctrl.Manager, log logr.Logger, o xpcontroller.Options) error {
 	}
 	// deterministicExternalName is false: Create() sends metadata.name as-is,
 	// so the reconciler must not retry Create after an unrecorded outcome.
-	return register.ManagedController(mgr, "ContainerRegistryAuth", &v1alpha1.ContainerRegistryAuth{}, &v1alpha1.ContainerRegistryAuthList{}, conn, log, o, false)
+	return register.ManagedController(mgr, register.Registration{
+		Kind:      "ContainerRegistryAuth",
+		Object:    &v1alpha1.ContainerRegistryAuth{},
+		List:      &v1alpha1.ContainerRegistryAuthList{},
+		Connector: conn,
+	}, log, o)
 }

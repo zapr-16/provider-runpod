@@ -99,22 +99,36 @@ func Gated(gate xpcontroller.Gate, gvk schema.GroupVersionKind, log logr.Logger,
 	return nil
 }
 
-// ManagedController registers a managed-resource reconciler for the given
-// kind, delegating external-client construction to the kind's connector.
-// list is a fresh, empty list of the kind (e.g. &v1alpha1.PodList{}), used
-// only to drive the optional state-metrics recorder. o carries the poll
-// interval, feature flags, rate limiting, metric recorders, and the
-// safe-start gate shared by every kind in this provider; every option is
-// wired here once instead of being repeated at each call site.
-// deterministicExternalName must be true only for kinds whose external
-// client always sends a deterministic create name (currently Pod and
-// Endpoint; see fieldcmp.DerivedName). It is threaded straight into
-// managed.WithDeterministicExternalName, which controls whether the
-// reconciler is willing to retry Create after a prior attempt's outcome
-// went unrecorded (meta.ExternalCreateIncomplete) instead of refusing to
-// proceed forever: with a non-deterministic name that retry could silently
-// double-create and orphan a billed resource, so it must stay false for any
-// kind whose external client does not guarantee a deterministic name.
+// Registration describes one managed-resource kind to ManagedController.
+type Registration struct {
+	// Kind is the resource's kind within this provider's group/version
+	// (e.g. "Pod").
+	Kind string
+	// Object is a fresh, empty instance of the kind (e.g. &v1alpha1.Pod{}).
+	Object client.Object
+	// List is a fresh, empty list of the kind (e.g. &v1alpha1.PodList{}),
+	// used only to drive the optional state-metrics recorder.
+	List xpresource.ManagedList
+	// Connector builds the kind's external client per reconcile.
+	Connector managed.ExternalConnector
+	// DeterministicExternalName must be true only for kinds whose external
+	// client always sends a deterministic create name (currently Pod and
+	// Endpoint; see fieldcmp.DerivedName). It is threaded straight into
+	// managed.WithDeterministicExternalName, which controls whether the
+	// reconciler is willing to retry Create after a prior attempt's outcome
+	// went unrecorded (meta.ExternalCreateIncomplete) instead of refusing to
+	// proceed forever: with a non-deterministic name that retry could
+	// silently double-create and orphan a billed resource, so it must stay
+	// false for any kind whose external client does not guarantee a
+	// deterministic name.
+	DeterministicExternalName bool
+}
+
+// ManagedController registers a managed-resource reconciler for the kind
+// described by reg. o carries the poll interval, feature flags, rate
+// limiting, metric recorders, and the safe-start gate shared by every kind
+// in this provider; every option is wired here once instead of being
+// repeated at each call site.
 //
 // When o.Gate is set, controller registration is deferred until the kind's
 // CustomResourceDefinition is Established, so the provider can start (and
@@ -122,16 +136,16 @@ func Gated(gate xpcontroller.Gate, gvk schema.GroupVersionKind, log logr.Logger,
 // fails once the gate releases it, there is no synchronous caller left to
 // report the error to, so it is treated as fatal, matching how every other
 // setup failure in this provider is handled at startup.
-func ManagedController(mgr ctrl.Manager, kind string, obj client.Object, list xpresource.ManagedList, conn managed.ExternalConnector, log logr.Logger, o xpcontroller.Options, deterministicExternalName bool) error {
-	gvk := v1alpha1.SchemeGroupVersion.WithKind(kind)
+func ManagedController(mgr ctrl.Manager, reg Registration, log logr.Logger, o xpcontroller.Options) error {
+	gvk := v1alpha1.SchemeGroupVersion.WithKind(reg.Kind)
 	name := xpresource.ManagedKind(gvk)
 
 	setup := func() error {
 		ropts := []managed.ReconcilerOption{
-			managed.WithExternalConnector(conn),
+			managed.WithExternalConnector(reg.Connector),
 			managed.WithLogger(logging.NewLogrLogger(log)),
 			managed.WithPollInterval(o.PollInterval),
-			managed.WithDeterministicExternalName(deterministicExternalName),
+			managed.WithDeterministicExternalName(reg.DeterministicExternalName),
 		}
 		if o.Features.Enabled(feature.EnableBetaManagementPolicies) {
 			ropts = append(ropts, managed.WithManagementPolicies())
@@ -147,11 +161,11 @@ func ManagedController(mgr ctrl.Manager, kind string, obj client.Object, list xp
 		// independent of the per-controller item backoff below.
 		var rec reconcile.Reconciler = r
 		if o.GlobalRateLimiter != nil {
-			rec = ratelimiter.NewReconciler(kind, r, o.GlobalRateLimiter)
+			rec = ratelimiter.NewReconciler(reg.Kind, r, o.GlobalRateLimiter)
 		}
 
 		if err := ctrl.NewControllerManagedBy(mgr).
-			For(obj).
+			For(reg.Object).
 			WithOptions(o.ForControllerRuntime()).
 			Complete(rec); err != nil {
 			return err
@@ -163,7 +177,7 @@ func ManagedController(mgr ctrl.Manager, kind string, obj client.Object, list xp
 				interval = o.PollInterval
 			}
 
-			recorder := statemetrics.NewMRStateRecorder(mgr.GetClient(), logging.NewLogrLogger(log), o.MetricOptions.MRStateMetrics, list, interval)
+			recorder := statemetrics.NewMRStateRecorder(mgr.GetClient(), logging.NewLogrLogger(log), o.MetricOptions.MRStateMetrics, reg.List, interval)
 			if err := mgr.Add(recorder); err != nil {
 				return err
 			}

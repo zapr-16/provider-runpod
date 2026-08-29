@@ -44,5 +44,13 @@ func Setup(mgr ctrl.Manager, log logr.Logger, o xpcontroller.Options) error {
 	// from metadata.name and the resource UID (fieldcmp.DerivedName), which
 	// lets Observe() safely recover from an ambiguous create instead of the
 	// reconciler refusing to retry forever.
-	return register.ManagedController(mgr, "Endpoint", &v1alpha1.Endpoint{}, &v1alpha1.EndpointList{}, conn, log, o, true)
+	return register.ManagedController(mgr, register.Registration{
+		Kind:      "Endpoint",
+		Object:    &v1alpha1.Endpoint{},
+		List:      &v1alpha1.EndpointList{},
+		Connector: conn,
+		// Create sends a deterministic name (see fieldcmp.DerivedName), so
+		// the reconciler may safely retry after an ambiguous create.
+		DeterministicExternalName: true,
+	}, log, o)
 }
