@@ -3,7 +3,7 @@ kind: Provider
 metadata:
   name: provider-runpod
   annotations:
-    meta.crossplane.io/maintainer: zapr-16 <pazrodrigo@gmail.com>
+    meta.crossplane.io/maintainer: zapr-16 <16386389+zapr-16@users.noreply.github.com>
     meta.crossplane.io/source: github.com/zapr-16/provider-runpod
     meta.crossplane.io/license: Apache-2.0
     meta.crossplane.io/description: |
