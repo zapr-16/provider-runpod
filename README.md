@@ -6,8 +6,9 @@ provider-runpod is a Crossplane provider for RunPod GPU cloud.
 
 Crossplane **v2.0 or later** must be installed in the cluster before
 installing this provider: https://docs.crossplane.io/latest/software/install/
-`Pod` and `Endpoint` are namespaced managed resources (Crossplane v2's
-namespaced-MR model), so they will not install on a v1.x Crossplane.
+Every managed resource (`Pod`, `Endpoint`, `NetworkVolume`,
+`ContainerRegistryAuth`, `Template`) is namespaced (Crossplane v2's
+namespaced-MR model), so the provider will not install on a v1.x Crossplane.
 
 > **Breaking change (v0.4.0):** this provider migrated to crossplane-runtime
 > v2. `Pod` and `Endpoint` are now namespace-scoped (previously
@@ -71,16 +72,37 @@ spec:
       key: apiKey
 ```
 
-A namespace-scoped `ProviderConfig` (same `spec` shape) is also available
-for credentials that should only be usable from a single namespace; set
-`spec.providerConfigRef: {name: default, kind: ProviderConfig}` on the
-`Pod`/`Endpoint` to use it.
+A namespace-scoped `ProviderConfig` is also available for credentials that
+should only be usable from a single namespace. Its `secretRef` has **no
+`namespace` field**: the secret is always read from the ProviderConfig's own
+namespace, so a tenant can never point it at a secret elsewhere in the
+cluster. Managed resources can only reference a `ProviderConfig` in their
+own namespace.
+
+```yaml
+apiVersion: runpod.crossplane.io/v1beta1
+kind: ProviderConfig
+metadata:
+  name: team-config
+  namespace: team-a
+spec:
+  credentials:
+    secretRef:
+      name: runpod-api-key   # read from namespace team-a
+      key: apiKey
+```
+
+Reference it with `spec.providerConfigRef: {kind: ProviderConfig, name: team-config}`.
+`providerConfigRef.kind` is required whenever `providerConfigRef` is set; the
+`{kind: ClusterProviderConfig, name: default}` default applies only when the
+field is omitted entirely.
 
 ### Runtime flags
 
-The controller binary accepts the following flags (set via
-`spec.controllerConfigRef`/`DeploymentRuntimeConfig` `args`, or directly on
-the container command when running outside Crossplane's package manager):
+The controller binary accepts the following flags. Under Crossplane, set them
+as container `args` in a `DeploymentRuntimeConfig` referenced from the
+`Provider`'s `spec.runtimeConfigRef`; outside Crossplane's package manager,
+pass them on the container command directly.
 
 | Flag | Default | Description |
 | --- | --- | --- |
@@ -118,11 +140,17 @@ Most fields (image, env, disk sizes, ports, ...) are updated in place via
 `PATCH /pods/{podId}` — changes apply the next time the pod (re)starts.
 Set `spec.forProvider.desiredState: EXITED` to stop the pod (storage keeps
 billing while stopped, compute does not) and `RUNNING` (or leave it unset)
-to start/resume it; GPU type and interruptible are immutable at the RunPod
-API. Changing either after creation is surfaced as drift via
-`status.atProvider.driftDetected` rather than being automatically applied
-— the controller only replaces the pod if `spec.forProvider.recreateOnTerminate`
-also applies.
+to start/resume it.
+
+GPU type and interruptible are immutable at the RunPod API. Changing either
+after creation is never applied automatically; it is surfaced as
+`status.atProvider.driftDetected: true`. Delete and re-create the `Pod` to
+apply it.
+
+`spec.forProvider.recreateOnTerminate: true` is unrelated to drift: when
+RunPod terminates the pod out from under the controller (Spot reclaim,
+console delete, ...), the controller deletes the dead pod and provisions a
+fresh one from the same spec.
 
 ## Create a serverless Endpoint
 
@@ -200,8 +228,13 @@ spec:
     name: default
   forProvider:
     credentialsSecretRef:
-      name: ghcr-creds
+      name: ghcr-creds   # same namespace; keys default to username/password
 ```
+
+The Secret must live in the resource's namespace and hold `username` and
+`password` keys (override with `credentialsSecretRef.usernameKey` /
+`passwordKey`). RunPod never returns the credentials, and the kind is
+immutable: change the Secret, then re-create the resource.
 
 ## Create a Template
 
@@ -245,6 +278,19 @@ Adoption requires the image/GPU (Pod) or template/image (Endpoint) to also
 match the spec; if more than one resource carries the name, or the identity
 fields don't match, the reconciler reports an error rather than guessing.
 
+## Connection details
+
+Each kind publishes these keys to the Secret named by
+`spec.writeConnectionSecretToRef` (in the resource's namespace):
+
+| Kind | Keys |
+| --- | --- |
+| `Pod` | `podId`; `endpoint` (HTTPS proxy URL for the first `http` port) and `port` (that port, or else the public port mapped to the first TCP port) when resolvable |
+| `Endpoint` | `endpointId`, `endpoint` (serverless data-plane base URL), `openaiUrl` (OpenAI-compatible base URL) |
+| `NetworkVolume` | `networkVolumeId` |
+| `ContainerRegistryAuth` | `containerRegistryAuthId` |
+| `Template` | `templateId` |
+
 ## Docs
 
 - `docs/local-testing.md` — local kind/Crossplane smoke harness
@@ -255,8 +301,24 @@ fields don't match, the reconciler reports an error rather than guessing.
 ## Development
 
 ```bash
-make generate
+make generate      # deepcopy + CRD manifests (commit the result)
 make build
-make test
-RUNPOD_API_KEY=<your-key> go test -v ./tests/e2e/...
+make test          # unit tests with -race
+make lint          # golangci-lint (pinned version)
+make reviewable    # generate + lint
+make spec-update   # re-fetch the vendored RunPod OpenAPI spec
+make xpkg-build    # build the Crossplane package
 ```
+
+Live checks against the real RunPod API (these create billed resources):
+
+```bash
+RUNPOD_API_KEY=<your-key> go test -v ./tests/e2e/...
+
+hack/local-crossplane-up.sh                                   # kind + Crossplane + provider
+RUNPOD_API_KEY=<your-key> hack/local-crossplane-smoke.sh          # GPU Pod lifecycle
+RUNPOD_API_KEY=<your-key> hack/local-crossplane-endpoint-smoke.sh # Endpoint + inference + in-use protection
+hack/local-crossplane-down.sh
+```
+
+See `docs/local-testing.md` for options.
