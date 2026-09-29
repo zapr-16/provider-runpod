@@ -19,6 +19,11 @@ SECRET_NAME="${SECRET_NAME:-runpod-api-key}"
 PROVIDER_CONFIG_NAME="${PROVIDER_CONFIG_NAME:-default}"
 RUNPOD_API_BASE="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 IN_USE_FINALIZER="in-use.crossplane.io"
+# Inference cold-starts a GPU worker and loads the model, which can take
+# several minutes; the worker is billed per second until idleTimeout.
+SKIP_INFERENCE="${SKIP_INFERENCE:-0}"
+INFERENCE_TIMEOUT_SECONDS="${INFERENCE_TIMEOUT_SECONDS:-900}"
+INFERENCE_PROMPT="${INFERENCE_PROMPT:-Reply with the single word: pong}"
 
 if ! command -v kubectl >/dev/null 2>&1; then
   echo "missing required command: kubectl" >&2
@@ -27,6 +32,11 @@ fi
 
 if ! command -v curl >/dev/null 2>&1; then
   echo "missing required command: curl" >&2
+  exit 1
+fi
+
+if ! command -v jq >/dev/null 2>&1; then
+  echo "missing required command: jq" >&2
   exit 1
 fi
 
@@ -103,6 +113,61 @@ wait_for_endpoint_ready() {
   fi
 
   echo "==> Endpoint ready: endpointId=${ENDPOINT_ID} templateId=${TEMPLATE_ID}"
+}
+
+# assert_inference sends one job through RunPod's serverless queue API and
+# waits for it to complete. The data-plane URL is read from the published
+# connection secret, so this also verifies the connection details a consumer
+# would use.
+assert_inference() {
+  if [[ "${SKIP_INFERENCE}" == "1" ]]; then
+    echo "==> SKIP_INFERENCE=1; skipping inference check"
+    return 0
+  fi
+
+  local base_url=""
+  local job_id=""
+  local response=""
+  local status=""
+  local output=""
+  local deadline=$((SECONDS + INFERENCE_TIMEOUT_SECONDS))
+
+  base_url="$(kubectl get secret "${LOCAL_TEST_CONN_SECRET_NAME}" -n "${LOCAL_TEST_NAMESPACE}" -o jsonpath='{.data.endpoint}' | base64 --decode)"
+  if [[ -z "${base_url}" ]]; then
+    fail "connection secret ${LOCAL_TEST_NAMESPACE}/${LOCAL_TEST_CONN_SECRET_NAME} has no endpoint key"
+  fi
+
+  echo "==> Submitting inference job to ${base_url}/run (cold start may take several minutes)"
+  response="$(jq -n --arg prompt "${INFERENCE_PROMPT}" '{input: {prompt: $prompt, sampling_params: {max_tokens: 16, temperature: 0}}}' \
+    | curl -fsS -X POST -H "Authorization: Bearer ${RUNPOD_API_KEY}" -H 'Content-Type: application/json' \
+      --data-binary @- "${base_url}/run")" || fail "could not submit inference job to ${base_url}/run"
+  job_id="$(jq -r '.id // empty' <<<"${response}")"
+  if [[ -z "${job_id}" ]]; then
+    fail "inference submit returned no job id: ${response}"
+  fi
+
+  while [[ "${SECONDS}" -lt "${deadline}" ]]; do
+    response="$(curl -fsS -H "Authorization: Bearer ${RUNPOD_API_KEY}" "${base_url}/status/${job_id}" || true)"
+    status="$(jq -r '.status // empty' <<<"${response}" 2>/dev/null || true)"
+    case "${status}" in
+      COMPLETED)
+        output="$(jq -c '.output' <<<"${response}")"
+        if [[ -z "${output}" || "${output}" == "null" || "${output}" == "[]" ]]; then
+          fail "inference job ${job_id} completed with empty output: ${response}"
+        fi
+        echo "==> Inference job ${job_id} completed: ${output}"
+        return 0
+        ;;
+      FAILED | CANCELLED | TIMED_OUT)
+        fail "inference job ${job_id} ended with status ${status}: ${response}"
+        ;;
+    esac
+    echo "    job ${job_id}: ${status:-unknown}"
+    sleep "${POLL_SECONDS}"
+  done
+
+  curl -fsS -X POST -H "Authorization: Bearer ${RUNPOD_API_KEY}" "${base_url}/cancel/${job_id}" >/dev/null 2>&1 || true
+  fail "inference job ${job_id} did not complete within ${INFERENCE_TIMEOUT_SECONDS}s (last status: ${status:-unknown})"
 }
 
 assert_cluster_provider_config_held() {
@@ -197,8 +262,9 @@ echo "==> Applying sample Endpoint (workersMin=0, scale-to-zero)"
 kubectl apply -f "${ROOT_DIR}/examples/endpoint-vllm.yaml"
 
 wait_for_endpoint_ready
+assert_inference
 assert_cluster_provider_config_held
 assert_cluster_provider_config_deleted_after_endpoint_gone
 assert_runpod_resources_gone
 
-echo "==> In-use protection smoke test passed"
+echo "==> Endpoint smoke test passed (inference, in-use protection, remote cleanup)"

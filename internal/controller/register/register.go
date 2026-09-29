@@ -124,6 +124,34 @@ type Registration struct {
 	DeterministicExternalName bool
 }
 
+// reconcilerOptions returns the managed.Reconciler options shared by every
+// kind in this provider.
+func reconcilerOptions(reg Registration, log logr.Logger, o xpcontroller.Options) []managed.ReconcilerOption {
+	ropts := []managed.ReconcilerOption{
+		managed.WithExternalConnector(reg.Connector),
+		managed.WithLogger(logging.NewLogrLogger(log)),
+		managed.WithPollInterval(o.PollInterval),
+		managed.WithDeterministicExternalName(reg.DeterministicExternalName),
+		// No initializers: the runtime's default NameAsExternalName would
+		// set the external-name to metadata.name before Create, but RunPod
+		// assigns every resource ID itself. That default would make each
+		// Create start with a GET that can only 404, reject names containing
+		// dots (they fail resource-ID validation), and, worst, keep the
+		// external-name non-empty after a crash between the RunPod POST and
+		// persisting the real ID, so Observe would never reach the
+		// ambiguous-create recovery path and Create would run again,
+		// duplicating a billed resource.
+		managed.WithInitializers(),
+	}
+	if o.Features.Enabled(feature.EnableBetaManagementPolicies) {
+		ropts = append(ropts, managed.WithManagementPolicies())
+	}
+	if o.MetricOptions != nil && o.MetricOptions.MRMetrics != nil {
+		ropts = append(ropts, managed.WithMetricRecorder(o.MetricOptions.MRMetrics))
+	}
+	return ropts
+}
+
 // ManagedController registers a managed-resource reconciler for the kind
 // described by reg. o carries the poll interval, feature flags, rate
 // limiting, metric recorders, and the safe-start gate shared by every kind
@@ -141,20 +169,7 @@ func ManagedController(mgr ctrl.Manager, reg Registration, log logr.Logger, o xp
 	name := xpresource.ManagedKind(gvk)
 
 	setup := func() error {
-		ropts := []managed.ReconcilerOption{
-			managed.WithExternalConnector(reg.Connector),
-			managed.WithLogger(logging.NewLogrLogger(log)),
-			managed.WithPollInterval(o.PollInterval),
-			managed.WithDeterministicExternalName(reg.DeterministicExternalName),
-		}
-		if o.Features.Enabled(feature.EnableBetaManagementPolicies) {
-			ropts = append(ropts, managed.WithManagementPolicies())
-		}
-		if o.MetricOptions != nil && o.MetricOptions.MRMetrics != nil {
-			ropts = append(ropts, managed.WithMetricRecorder(o.MetricOptions.MRMetrics))
-		}
-
-		r := managed.NewReconciler(mgr, name, ropts...)
+		r := managed.NewReconciler(mgr, name, reconcilerOptions(reg, log, o)...)
 
 		// Wrap the reconciler with the provider-wide rate limiter so the
 		// aggregate reconcile rate across every kind stays bounded,
