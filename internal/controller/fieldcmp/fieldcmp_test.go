@@ -7,51 +7,6 @@ import (
 	v1alpha1 "github.com/zapr-16/provider-runpod/apis/v1alpha1"
 )
 
-func TestStringSlicesEqual(t *testing.T) {
-	cases := map[string]struct {
-		a, b []string
-		want bool
-	}{
-		"BothNil":        {a: nil, b: nil, want: true},
-		"BothEmpty":      {a: []string{}, b: []string{}, want: true},
-		"Equal":          {a: []string{"a", "b"}, b: []string{"a", "b"}, want: true},
-		"DifferentLen":   {a: []string{"a"}, b: []string{"a", "b"}, want: false},
-		"DifferentOrder": {a: []string{"a", "b"}, b: []string{"b", "a"}, want: false},
-	}
-
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			got := StringSlicesEqual(tc.a, tc.b)
-			if got != tc.want {
-				t.Fatalf("StringSlicesEqual(%v, %v) = %v, want %v", tc.a, tc.b, got, tc.want)
-			}
-		})
-	}
-}
-
-func TestStringMapsEqual(t *testing.T) {
-	cases := map[string]struct {
-		a, b map[string]string
-		want bool
-	}{
-		"BothNil":        {a: nil, b: nil, want: true},
-		"BothEmpty":      {a: map[string]string{}, b: map[string]string{}, want: true},
-		"Equal":          {a: map[string]string{"k": "v"}, b: map[string]string{"k": "v"}, want: true},
-		"DifferentLen":   {a: map[string]string{"k": "v"}, b: map[string]string{}, want: false},
-		"MissingKey":     {a: map[string]string{"k": "v"}, b: map[string]string{"other": "v"}, want: false},
-		"DifferentValue": {a: map[string]string{"k": "v"}, b: map[string]string{"k": "other"}, want: false},
-	}
-
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			got := StringMapsEqual(tc.a, tc.b)
-			if got != tc.want {
-				t.Fatalf("StringMapsEqual(%v, %v) = %v, want %v", tc.a, tc.b, got, tc.want)
-			}
-		})
-	}
-}
-
 func TestBuildEnvMap(t *testing.T) {
 	cases := map[string]struct {
 		in   []v1alpha1.EnvVar
@@ -81,37 +36,68 @@ func TestBuildEnvMap(t *testing.T) {
 	}
 }
 
-func TestCloneStrings(t *testing.T) {
+func TestBuildPortTokens(t *testing.T) {
 	cases := map[string]struct {
-		in   []string
+		in   []v1alpha1.Port
 		want []string
 	}{
-		"Nil":   {in: nil, want: nil},
-		"Empty": {in: []string{}, want: nil},
-		"NonEmpty": {
-			in:   []string{"a", "b"},
-			want: []string{"a", "b"},
-		},
+		"Empty":           {in: nil, want: nil},
+		"DefaultsToTCP":   {in: []v1alpha1.Port{{Number: 22}}, want: []string{"22/tcp"}},
+		"LowercasesProto": {in: []v1alpha1.Port{{Number: 8000, Protocol: "HTTP"}, {Number: 22, Protocol: "tcp"}}, want: []string{"8000/http", "22/tcp"}},
 	}
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			got := CloneStrings(tc.in)
+			got := BuildPortTokens(tc.in)
 			if !reflect.DeepEqual(got, tc.want) {
-				t.Fatalf("CloneStrings(%v) = %v, want %v", tc.in, got, tc.want)
-			}
-
-			if len(tc.in) > 0 {
-				got[0] = "mutated"
-				if tc.in[0] == "mutated" {
-					t.Fatalf("CloneStrings did not copy the input slice")
-				}
-				tc.in[1] = "input-mutated"
-				if got[1] == "input-mutated" {
-					t.Fatalf("CloneStrings output aliases the input slice")
-				}
+				t.Fatalf("BuildPortTokens(%v) = %v, want %v", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestPortTokensEqual(t *testing.T) {
+	cases := map[string]struct {
+		want, observed []string
+		equal          bool
+	}{
+		"BothNil":          {equal: true},
+		"OrderInsensitive": {want: []string{"22/tcp", "8000/http"}, observed: []string{"8000/http", "22/tcp"}, equal: true},
+		"CaseAndDefault":   {want: []string{"22/tcp", "8000/http"}, observed: []string{"22", "8000/HTTP"}, equal: true},
+		"DifferentLen":     {want: []string{"22/tcp"}, observed: []string{"22/tcp", "8000/http"}, equal: false},
+		"DifferentToken":   {want: []string{"22/tcp"}, observed: []string{"22/udp"}, equal: false},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := PortTokensEqual(tc.want, tc.observed); got != tc.equal {
+				t.Fatalf("PortTokensEqual(%v, %v) = %v, want %v", tc.want, tc.observed, got, tc.equal)
+			}
+		})
+	}
+}
+
+func TestNormalizePortToken(t *testing.T) {
+	if got := NormalizePortToken(8000, ""); got != "8000/tcp" {
+		t.Fatalf("NormalizePortToken default protocol = %q, want 8000/tcp", got)
+	}
+	if got := NormalizePortToken(8000, "HTTP"); got != "8000/http" {
+		t.Fatalf("NormalizePortToken uppercase protocol = %q, want 8000/http", got)
+	}
+}
+
+func TestNormalizeObservedToken(t *testing.T) {
+	cases := map[string]string{
+		"22":        "22/tcp",
+		"22/":       "22/tcp",
+		"22/TCP":    "22/tcp",
+		"8000/http": "8000/http",
+	}
+
+	for in, want := range cases {
+		if got := NormalizeObservedToken(in); got != want {
+			t.Fatalf("NormalizeObservedToken(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 

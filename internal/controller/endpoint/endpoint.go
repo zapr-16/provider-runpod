@@ -40,17 +40,15 @@ func Setup(mgr ctrl.Manager, log logr.Logger, o xpcontroller.Options) error {
 		ErrMissingProviderConfig: errMissingProviderConfig,
 		NewExternal:              newExternal,
 	}
-	// deterministicExternalName is true: Create() always sends a name derived
-	// from metadata.name and the resource UID (fieldcmp.DerivedName), which
-	// lets Observe() safely recover from an ambiguous create instead of the
-	// reconciler refusing to retry forever.
 	return register.ManagedController(mgr, register.Registration{
 		Kind:      "Endpoint",
 		Object:    &v1alpha1.Endpoint{},
 		List:      &v1alpha1.EndpointList{},
 		Connector: conn,
-		// Create sends a deterministic name (see fieldcmp.DerivedName), so
-		// the reconciler may safely retry after an ambiguous create.
+		// Create() always sends a name derived from metadata.name and the
+		// resource UID (fieldcmp.DerivedName), which lets Observe() safely
+		// recover from an ambiguous create instead of the reconciler
+		// refusing to retry forever.
 		DeterministicExternalName: true,
 	}, log, o)
 }

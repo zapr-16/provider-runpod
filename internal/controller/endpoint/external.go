@@ -3,13 +3,15 @@ package endpoint
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
 	managed "github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
 	xpresource "github.com/crossplane/crossplane-runtime/v2/pkg/resource"
 	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	"github.com/go-logr/logr"
-	"github.com/pkg/errors"
 
 	v1alpha1 "github.com/zapr-16/provider-runpod/apis/v1alpha1"
 	runpodclient "github.com/zapr-16/provider-runpod/internal/clients"
@@ -239,8 +241,8 @@ func (e *external) Create(ctx context.Context, mg xpresource.Managed) (managed.E
 		IsServerless:            true,
 		Env:                     fieldcmp.BuildEnvMap(ep.Spec.ForProvider.Env),
 		ContainerDiskInGb:       ep.Spec.ForProvider.ContainerDiskInGb,
-		DockerStartCmd:          fieldcmp.CloneStrings(ep.Spec.ForProvider.DockerStartCmd),
-		DockerEntrypoint:        fieldcmp.CloneStrings(ep.Spec.ForProvider.DockerEntrypoint),
+		DockerStartCmd:          ep.Spec.ForProvider.DockerStartCmd,
+		DockerEntrypoint:        ep.Spec.ForProvider.DockerEntrypoint,
 		ContainerRegistryAuthID: ep.Spec.ForProvider.ContainerRegistryAuthID,
 	})
 	if err != nil {
@@ -278,7 +280,7 @@ func (e *external) Update(ctx context.Context, mg xpresource.Managed) (managed.E
 
 	spec := ep.Spec.ForProvider
 	endpointPatch := runpodclient.UpdateEndpointRequest{
-		GPUTypeIDs:          fieldcmp.CloneStrings(spec.GPUTypeIDs),
+		GPUTypeIDs:          spec.GPUTypeIDs,
 		GPUCount:            spec.GPUCount,
 		WorkersMin:          spec.WorkersMin,
 		WorkersMax:          spec.WorkersMax,
@@ -287,16 +289,14 @@ func (e *external) Update(ctx context.Context, mg xpresource.Managed) (managed.E
 		ScalerType:          scalerTypeString(spec.ScalerType),
 		ScalerValue:         spec.ScalerValue,
 		NetworkVolumeID:     spec.NetworkVolumeID,
-		DataCenterIDs:       fieldcmp.CloneStrings(spec.DataCenterIDs),
+		DataCenterIDs:       spec.DataCenterIDs,
 		ExecutionTimeoutMs:  spec.ExecutionTimeoutMs,
 		VCPUCount:           spec.VCPUCount,
-		CPUFlavorIDs:        fieldcmp.CloneStrings(spec.CPUFlavorIDs),
-		AllowedCudaVersions: fieldcmp.CloneStrings(spec.AllowedCudaVersions),
+		CPUFlavorIDs:        spec.CPUFlavorIDs,
+		AllowedCudaVersions: spec.AllowedCudaVersions,
 		MinCudaVersion:      spec.MinCudaVersion,
-		NetworkVolumeIDs:    fieldcmp.CloneStrings(spec.NetworkVolumeIDs),
-	}
-	if spec.TemplateID != nil {
-		endpointPatch.TemplateID = spec.TemplateID
+		NetworkVolumeIDs:    spec.NetworkVolumeIDs,
+		TemplateID:          spec.TemplateID,
 	}
 	if err := e.client.UpdateEndpoint(ctx, externalName, endpointPatch); err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, errUpdateEndpoint)
@@ -345,8 +345,8 @@ func (e *external) Update(ctx context.Context, mg xpresource.Managed) (managed.E
 		ImageName:               spec.ImageName,
 		Env:                     fieldcmp.BuildEnvMap(spec.Env),
 		ContainerDiskInGb:       spec.ContainerDiskInGb,
-		DockerStartCmd:          fieldcmp.CloneStrings(spec.DockerStartCmd),
-		DockerEntrypoint:        fieldcmp.CloneStrings(spec.DockerEntrypoint),
+		DockerStartCmd:          spec.DockerStartCmd,
+		DockerEntrypoint:        spec.DockerEntrypoint,
 		ContainerRegistryAuthID: spec.ContainerRegistryAuthID,
 	}); err != nil {
 		return managed.ExternalUpdate{}, errors.Wrap(err, errUpdateTemplate)
@@ -434,7 +434,7 @@ func buildCreateEndpointRequest(name *string, templateID string, spec v1alpha1.E
 	return runpodclient.CreateEndpointRequest{
 		Name:                name,
 		TemplateID:          templateID,
-		GPUTypeIDs:          fieldcmp.CloneStrings(spec.GPUTypeIDs),
+		GPUTypeIDs:          spec.GPUTypeIDs,
 		GPUCount:            spec.GPUCount,
 		WorkersMin:          spec.WorkersMin,
 		WorkersMax:          spec.WorkersMax,
@@ -443,14 +443,14 @@ func buildCreateEndpointRequest(name *string, templateID string, spec v1alpha1.E
 		ScalerType:          scalerTypeString(spec.ScalerType),
 		ScalerValue:         spec.ScalerValue,
 		NetworkVolumeID:     spec.NetworkVolumeID,
-		DataCenterIDs:       fieldcmp.CloneStrings(spec.DataCenterIDs),
+		DataCenterIDs:       spec.DataCenterIDs,
 		ExecutionTimeoutMs:  spec.ExecutionTimeoutMs,
 		ComputeType:         spec.ComputeType,
 		VCPUCount:           spec.VCPUCount,
-		CPUFlavorIDs:        fieldcmp.CloneStrings(spec.CPUFlavorIDs),
-		AllowedCudaVersions: fieldcmp.CloneStrings(spec.AllowedCudaVersions),
+		CPUFlavorIDs:        spec.CPUFlavorIDs,
+		AllowedCudaVersions: spec.AllowedCudaVersions,
 		MinCudaVersion:      spec.MinCudaVersion,
-		NetworkVolumeIDs:    fieldcmp.CloneStrings(spec.NetworkVolumeIDs),
+		NetworkVolumeIDs:    spec.NetworkVolumeIDs,
 	}
 }
 
@@ -477,7 +477,7 @@ func hasEndpointDrift(spec v1alpha1.EndpointParameters, observed *runpodclient.E
 	// dataCenterIds is not compared: the API accepts it but never echoes it.
 	// Nil and empty both mean "unmanaged": the PATCH payload uses omitempty,
 	// so an empty list could never be reconciled anyway.
-	if len(spec.GPUTypeIDs) > 0 && !fieldcmp.StringSlicesEqual(spec.GPUTypeIDs, observed.GPUTypeIDs) {
+	if len(spec.GPUTypeIDs) > 0 && !slices.Equal(spec.GPUTypeIDs, observed.GPUTypeIDs) {
 		return true
 	}
 	// computeType/vcpuCount/cpuFlavorIds/allowedCudaVersions/minCudaVersion/networkVolumeIds
@@ -497,15 +497,15 @@ func hasTemplateDrift(spec v1alpha1.EndpointParameters, observed runpodclient.Te
 		return true
 	}
 	// Nil and empty both mean "unmanaged" (see hasEndpointDrift).
-	if len(spec.Env) > 0 && !fieldcmp.StringMapsEqual(fieldcmp.BuildEnvMap(spec.Env), observed.Env) {
+	if len(spec.Env) > 0 && !maps.Equal(fieldcmp.BuildEnvMap(spec.Env), observed.Env) {
 		return true
 	}
 	// GET /templates echoes these, unlike the endpoint-level fields above, so
 	// they get real drift detection. Command arrays are order-sensitive.
-	if len(spec.DockerStartCmd) > 0 && !fieldcmp.StringSlicesEqual(spec.DockerStartCmd, observed.DockerStartCmd) {
+	if len(spec.DockerStartCmd) > 0 && !slices.Equal(spec.DockerStartCmd, observed.DockerStartCmd) {
 		return true
 	}
-	if len(spec.DockerEntrypoint) > 0 && !fieldcmp.StringSlicesEqual(spec.DockerEntrypoint, observed.DockerEntrypoint) {
+	if len(spec.DockerEntrypoint) > 0 && !slices.Equal(spec.DockerEntrypoint, observed.DockerEntrypoint) {
 		return true
 	}
 	if stringPtrDrifts(spec.ContainerRegistryAuthID, observed.ContainerRegistryAuthID) {

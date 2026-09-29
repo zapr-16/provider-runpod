@@ -7,6 +7,7 @@ import (
 	"time"
 
 	xpcontroller "github.com/crossplane/crossplane-runtime/v2/pkg/controller"
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/feature"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/gate"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/logging"
@@ -14,10 +15,6 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/customresourcesgate"
 	managed "github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/statemetrics"
-	"github.com/go-logr/zapr"
-	"github.com/pkg/errors"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -25,6 +22,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	v1alpha1 "github.com/zapr-16/provider-runpod/apis/v1alpha1"
@@ -50,20 +48,12 @@ func main() {
 	)
 	flag.Parse()
 
-	zapLogger, err := newZapLogger(*debug)
-	if err != nil {
-		_, _ = os.Stderr.WriteString(err.Error() + "\n")
-		os.Exit(1)
-	}
-	logger := zapr.NewLogger(zapLogger)
+	logger := zap.New(zap.UseDevMode(*debug))
 	ctrl.SetLogger(logger)
 
-	// fatal logs err and exits. It flushes the zap logger first: a bare
-	// os.Exit after logging would otherwise drop any buffered log lines,
-	// since there is no deferred Sync left to run once the process exits.
+	// fatal logs err and exits.
 	fatal := func(err error, msg string) {
 		logger.Error(err, msg)
-		_ = zapLogger.Sync()
 		os.Exit(1)
 	}
 
@@ -147,11 +137,11 @@ func main() {
 	// before their CRD is Established makes no RunPod API calls and has no
 	// billing side effect, so the only cost of leaving them ungated is
 	// benign controller-runtime retry logging until the CRD appears.
-	if err := providerconfigcontroller.SetupWithManager(mgr, zapLogger.Named("providerconfig")); err != nil {
+	if err := providerconfigcontroller.SetupWithManager(mgr, logger.WithName("providerconfig")); err != nil {
 		fatal(err, "cannot set up ProviderConfig controller")
 	}
 
-	if err := providerconfigcontroller.SetupClusterWithManager(mgr, zapLogger.Named("clusterproviderconfig")); err != nil {
+	if err := providerconfigcontroller.SetupClusterWithManager(mgr, logger.WithName("clusterproviderconfig")); err != nil {
 		fatal(err, "cannot set up ClusterProviderConfig controller")
 	}
 
@@ -182,18 +172,4 @@ func main() {
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		fatal(err, "manager exited with error")
 	}
-}
-
-// newZapLogger builds the zap.Logger used for both the manager's logr
-// adapter and the ProviderConfig controllers' native zap logging. debug
-// switches to zap's development config (human-readable console encoding,
-// DebugLevel, stack traces on warnings) instead of the default production
-// JSON config.
-func newZapLogger(debug bool) (*zap.Logger, error) {
-	if debug {
-		cfg := zap.NewDevelopmentConfig()
-		cfg.Level = zap.NewAtomicLevelAt(zapcore.DebugLevel)
-		return cfg.Build()
-	}
-	return zap.NewProduction()
 }

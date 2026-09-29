@@ -41,11 +41,15 @@ func newLocalProviderConfig(name, namespace, secretName string) *v1beta1.Provide
 	}
 }
 
-// TestClientFromProviderConfigResolvesSecretInOwnNamespaceOnly is the core
+func localRef(pc *v1beta1.ProviderConfig) xpv2.ProviderConfigReference {
+	return xpv2.ProviderConfigReference{Name: pc.Name, Kind: v1beta1.ProviderConfigKind}
+}
+
+// TestClientForProviderConfigRefResolvesSecretInOwnNamespaceOnly is the core
 // tenancy guarantee for the namespaced ProviderConfig: its secretRef has no
 // namespace field, so resolution MUST use the ProviderConfig's own namespace
 // even when a same-named secret exists elsewhere holding different data.
-func TestClientFromProviderConfigResolvesSecretInOwnNamespaceOnly(t *testing.T) {
+func TestClientForProviderConfigRefResolvesSecretInOwnNamespaceOnly(t *testing.T) {
 	s := testScheme(t)
 
 	ownSecret := &corev1.Secret{
@@ -62,19 +66,19 @@ func TestClientFromProviderConfigResolvesSecretInOwnNamespaceOnly(t *testing.T) 
 
 	kube := fake.NewClientBuilder().WithScheme(s).WithObjects(ownSecret, otherSecret, pc).Build()
 
-	c, err := ClientFromProviderConfig(context.Background(), kube, pc)
+	c, err := ClientForProviderConfigRef(context.Background(), kube, pc.Namespace, localRef(pc))
 	if err != nil {
-		t.Fatalf("ClientFromProviderConfig() error = %v", err)
+		t.Fatalf("ClientForProviderConfigRef() error = %v", err)
 	}
 	if c.apiKey != "own-team-key" {
 		t.Fatalf("apiKey = %q, want %q (must resolve secret in PC's own namespace)", c.apiKey, "own-team-key")
 	}
 }
 
-// TestClientFromProviderConfigCannotReachSecretInAnotherNamespace asserts the
+// TestClientForProviderConfigRefCannotReachSecretInAnotherNamespace asserts the
 // negative case explicitly: with no secret in the PC's own namespace, a
 // same-named secret living in another namespace must NOT be reachable.
-func TestClientFromProviderConfigCannotReachSecretInAnotherNamespace(t *testing.T) {
+func TestClientForProviderConfigRefCannotReachSecretInAnotherNamespace(t *testing.T) {
 	s := testScheme(t)
 
 	otherSecret := &corev1.Secret{
@@ -85,7 +89,7 @@ func TestClientFromProviderConfigCannotReachSecretInAnotherNamespace(t *testing.
 
 	kube := fake.NewClientBuilder().WithScheme(s).WithObjects(otherSecret, pc).Build()
 
-	if _, err := ClientFromProviderConfig(context.Background(), kube, pc); err == nil {
-		t.Fatal("ClientFromProviderConfig() error = nil, want error (no secret in PC's own namespace)")
+	if _, err := ClientForProviderConfigRef(context.Background(), kube, pc.Namespace, localRef(pc)); err == nil {
+		t.Fatal("ClientForProviderConfigRef() error = nil, want error (no secret in PC's own namespace)")
 	}
 }

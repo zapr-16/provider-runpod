@@ -3,19 +3,18 @@ package pod
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/http"
 	"slices"
-	"sort"
 	"strconv"
-	"strings"
 	"time"
 
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
 	managed "github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
 	xpresource "github.com/crossplane/crossplane-runtime/v2/pkg/resource"
 	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	"github.com/go-logr/logr"
-	"github.com/pkg/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	v1alpha1 "github.com/zapr-16/provider-runpod/apis/v1alpha1"
@@ -192,7 +191,7 @@ func (e *external) observeResponse(ctx context.Context, pod *v1alpha1.Pod, respo
 		PodID:           response.ID,
 		DesiredStatus:   response.DesiredStatus,
 		PublicIP:        response.PublicIP,
-		PortMappings:    clonePortMappings(response.PortMappings),
+		PortMappings:    maps.Clone(response.PortMappings),
 		RuntimeEndpoint: endpoint,
 		CostPerHr:       response.CostPerHr,
 		GPUDisplayName:  gpuDisplayName,
@@ -296,29 +295,29 @@ func (e *external) Create(ctx context.Context, mg xpresource.Managed) (managed.E
 	req := runpodclient.CreatePodRequest{
 		Name:                    &name,
 		ImageName:               spec.ImageName,
-		GPUTypeIDs:              fieldcmp.CloneStrings(spec.GPUTypeIDs),
+		GPUTypeIDs:              spec.GPUTypeIDs,
 		GPUCount:                spec.GPUCount,
 		SupportPublicIP:         spec.SupportPublicIP,
 		ContainerDiskInGb:       spec.ContainerDiskInGb,
 		VolumeInGb:              spec.VolumeInGb,
 		VolumeMountPath:         spec.VolumeMountPath,
 		Env:                     fieldcmp.BuildEnvMap(spec.Env),
-		Ports:                   buildPortTokens(spec.Ports),
-		DockerStartCmd:          fieldcmp.CloneStrings(spec.DockerStartCmd),
-		DockerEntrypoint:        fieldcmp.CloneStrings(spec.DockerEntrypoint),
+		Ports:                   fieldcmp.BuildPortTokens(spec.Ports),
+		DockerStartCmd:          spec.DockerStartCmd,
+		DockerEntrypoint:        spec.DockerEntrypoint,
 		ComputeType:             spec.ComputeType,
 		VCPUCount:               spec.VCPUCount,
-		CPUFlavorIDs:            fieldcmp.CloneStrings(spec.CPUFlavorIDs),
+		CPUFlavorIDs:            spec.CPUFlavorIDs,
 		CPUFlavorPriority:       spec.CPUFlavorPriority,
-		DataCenterIDs:           fieldcmp.CloneStrings(spec.DataCenterIDs),
+		DataCenterIDs:           spec.DataCenterIDs,
 		DataCenterPriority:      spec.DataCenterPriority,
 		GPUTypePriority:         spec.GPUTypePriority,
-		CountryCodes:            fieldcmp.CloneStrings(spec.CountryCodes),
+		CountryCodes:            spec.CountryCodes,
 		Interruptible:           spec.Interruptible,
 		Locked:                  spec.Locked,
 		GlobalNetworking:        spec.GlobalNetworking,
 		VolumeEncrypted:         spec.VolumeEncrypted,
-		AllowedCudaVersions:     fieldcmp.CloneStrings(spec.AllowedCudaVersions),
+		AllowedCudaVersions:     spec.AllowedCudaVersions,
 		MinRAMPerGPU:            spec.MinRAMPerGPU,
 		MinVCPUPerGPU:           spec.MinVCPUPerGPU,
 		MinDiskBandwidthMBps:    spec.MinDiskBandwidthMBps,
@@ -373,9 +372,9 @@ func (e *external) Update(ctx context.Context, mg xpresource.Managed) (managed.E
 			VolumeInGb:              spec.VolumeInGb,
 			VolumeMountPath:         spec.VolumeMountPath,
 			Env:                     fieldcmp.BuildEnvMap(spec.Env),
-			Ports:                   buildPortTokens(spec.Ports),
-			DockerStartCmd:          fieldcmp.CloneStrings(spec.DockerStartCmd),
-			DockerEntrypoint:        fieldcmp.CloneStrings(spec.DockerEntrypoint),
+			Ports:                   fieldcmp.BuildPortTokens(spec.Ports),
+			DockerStartCmd:          spec.DockerStartCmd,
+			DockerEntrypoint:        spec.DockerEntrypoint,
 			Locked:                  spec.Locked,
 			GlobalNetworking:        spec.GlobalNetworking,
 			ContainerRegistryAuthID: spec.ContainerRegistryAuthID,
@@ -429,12 +428,7 @@ func hasEnvDrift(desired []v1alpha1.EnvVar, observed map[string]string) bool {
 		return false
 	}
 
-	want := map[string]string{}
-	for _, env := range desired {
-		want[env.Name] = env.Value
-	}
-
-	return !fieldcmp.StringMapsEqual(want, observed)
+	return !maps.Equal(fieldcmp.BuildEnvMap(desired), observed)
 }
 
 // hasPortsDrift reports whether declared ports diverge from the running
@@ -445,17 +439,7 @@ func hasPortsDrift(desired []v1alpha1.Port, observed []string) bool {
 		return false
 	}
 
-	want := map[string]struct{}{}
-	for _, port := range desired {
-		want[normalizePortToken(port.Number, port.Protocol)] = struct{}{}
-	}
-
-	got := map[string]struct{}{}
-	for _, port := range observed {
-		got[normalizeObservedToken(port)] = struct{}{}
-	}
-
-	return !stringSetEqual(want, got)
+	return !fieldcmp.PortTokensEqual(fieldcmp.BuildPortTokens(desired), observed)
 }
 
 // resolveConnectionTarget derives the primary connection endpoint for a pod.
@@ -466,7 +450,7 @@ func hasPortsDrift(desired []v1alpha1.Port, observed []string) bool {
 func resolveConnectionTarget(ports []v1alpha1.Port, podID, publicIP string, mappings map[string]int32) (string, string) {
 	if podID != "" {
 		for _, port := range ports {
-			if normalizeProtocol(port.Protocol) != "http" {
+			if fieldcmp.NormalizeProtocol(port.Protocol) != "http" {
 				continue
 			}
 			portString := strconv.Itoa(int(port.Number))
@@ -478,43 +462,13 @@ func resolveConnectionTarget(ports []v1alpha1.Port, podID, publicIP string, mapp
 		return "", ""
 	}
 
-	var fallback string
 	for _, port := range ports {
-		token := normalizePortToken(port.Number, port.Protocol)
-		externalPort, ok := mappings[token]
-		if !ok {
-			continue
-		}
-		if fallback == "" {
-			fallback = strconv.Itoa(int(externalPort))
+		if externalPort, ok := mappings[fieldcmp.NormalizePortToken(port.Number, port.Protocol)]; ok {
+			return "", strconv.Itoa(int(externalPort))
 		}
 	}
 
-	return "", fallback
-}
-
-// normalizePortToken builds a "<port>/<protocol>" token from spec fields;
-// the protocol is always appended, defaulting to tcp when unset.
-func normalizePortToken(number int32, protocol string) string {
-	return fmt.Sprintf("%d/%s", number, normalizeProtocol(protocol))
-}
-
-// normalizeObservedToken parses a RunPod "<port>/<protocol>" token; a
-// missing protocol segment defaults to tcp.
-func normalizeObservedToken(token string) string {
-	parts := strings.SplitN(strings.ToLower(token), "/", 2)
-	if len(parts) == 1 {
-		return fmt.Sprintf("%s/%s", parts[0], normalizeProtocol(""))
-	}
-	return fmt.Sprintf("%s/%s", parts[0], normalizeProtocol(parts[1]))
-}
-
-// normalizeProtocol lowercases the protocol, defaulting empty to tcp.
-func normalizeProtocol(protocol string) string {
-	if protocol == "" {
-		return "tcp"
-	}
-	return strings.ToLower(protocol)
+	return "", ""
 }
 
 func parsePodStartedAt(value string) (time.Time, error) {
@@ -566,10 +520,10 @@ func hasMutableDrift(spec v1alpha1.PodParameters, r *runpodclient.PodResponse) b
 	if spec.ContainerRegistryAuthID != nil && *spec.ContainerRegistryAuthID != r.ContainerRegistryAuthID {
 		return true
 	}
-	if len(spec.DockerStartCmd) > 0 && !fieldcmp.StringSlicesEqual(spec.DockerStartCmd, r.DockerStartCmd) {
+	if len(spec.DockerStartCmd) > 0 && !slices.Equal(spec.DockerStartCmd, r.DockerStartCmd) {
 		return true
 	}
-	if len(spec.DockerEntrypoint) > 0 && !fieldcmp.StringSlicesEqual(spec.DockerEntrypoint, r.DockerEntrypoint) {
+	if len(spec.DockerEntrypoint) > 0 && !slices.Equal(spec.DockerEntrypoint, r.DockerEntrypoint) {
 		return true
 	}
 	// globalNetworking is write-only (never echoed) and excluded, like
@@ -590,12 +544,7 @@ func hasImmutableDrift(spec v1alpha1.PodParameters, r *runpodclient.PodResponse)
 		return true
 	}
 	if len(spec.GPUTypeIDs) > 0 && r.Machine.GPUTypeID != "" {
-		for _, id := range spec.GPUTypeIDs {
-			if id == r.Machine.GPUTypeID {
-				return false
-			}
-		}
-		return true
+		return !slices.Contains(spec.GPUTypeIDs, r.Machine.GPUTypeID)
 	}
 	return false
 }
@@ -608,44 +557,4 @@ func hasLifecycleDrift(spec v1alpha1.PodParameters, observedStatus string) bool 
 		return false
 	}
 	return desiredStateOrDefault(spec) != observedStatus
-}
-
-func stringSetEqual(a, b map[string]struct{}) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for k := range a {
-		if _, ok := b[k]; !ok {
-			return false
-		}
-	}
-	return true
-}
-
-func clonePortMappings(in map[string]int32) map[string]int32 {
-	if in == nil {
-		return nil
-	}
-	out := make(map[string]int32, len(in))
-	keys := make([]string, 0, len(in))
-	for k := range in {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		out[k] = in[k]
-	}
-	return out
-}
-
-func buildPortTokens(in []v1alpha1.Port) []string {
-	if len(in) == 0 {
-		return nil
-	}
-
-	out := make([]string, 0, len(in))
-	for _, port := range in {
-		out = append(out, normalizePortToken(port.Number, port.Protocol))
-	}
-	return out
 }

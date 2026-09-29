@@ -29,7 +29,7 @@ type ContainerRegistryAuthResponse struct {
 // credential and returns its ID.
 func (c *Client) CreateContainerRegistryAuth(ctx context.Context, payload CreateContainerRegistryAuthRequest) (string, error) {
 	var out ContainerRegistryAuthResponse
-	if err := c.doJSON(ctx, http.MethodPost, containerRegistryAuthPath, payload, &out); err != nil {
+	if _, err := c.do(ctx, http.MethodPost, containerRegistryAuthPath, payload, &out); err != nil {
 		return "", err
 	}
 	return out.ID, nil

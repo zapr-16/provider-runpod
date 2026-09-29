@@ -84,7 +84,7 @@ the container command when running outside Crossplane's package manager):
 
 | Flag | Default | Description |
 | --- | --- | --- |
-| `--debug` | `false` | Development zap logging (human-readable, more verbose) instead of production JSON. |
+| `--debug` | `false` | Development logging (human-readable, debug level) instead of production JSON. |
 | `--poll-interval` | `1m` | How often each resource is polled for drift when no watch event has triggered a reconcile. |
 | `--max-reconcile-rate` | `10` | Global maximum reconciles per second across every controller. |
 | `--leader-election` | `true` | Use leader election for the controller manager. |
@@ -158,13 +158,6 @@ spec:
 Note: unlike pod proxy URLs, the serverless data plane
 (`status.atProvider.runtimeEndpoint`) requires an
 `Authorization: Bearer <RunPod API key>` header on every request.
-
-To point a tool such as [opencode](https://opencode.ai) at a provisioned
-endpoint, see `opencode.json` in this repo: replace the
-`<your-endpoint-id>` placeholder in `provider.runpod.options.baseURL` with
-the ID from `status.atProvider.endpointId` (or the `RUNPOD_ENDPOINT_ID`
-you chose), and export `RUNPOD_API_KEY` in your shell so `{env:RUNPOD_API_KEY}`
-resolves.
 
 ## Create a NetworkVolume
 
