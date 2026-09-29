@@ -4,6 +4,8 @@ builds:
   - id: provider
     binary: provider
     main: ./cmd/provider
+    flags:
+      - -trimpath
     goos:
       - linux
     goarch:

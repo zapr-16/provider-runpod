@@ -64,7 +64,7 @@ if [[ -z "${PROVIDER_GOARCH}" ]]; then
   PROVIDER_GOARCH="$(kubectl get nodes -o jsonpath='{.items[0].status.nodeInfo.architecture}')"
 fi
 
-CGO_ENABLED=0 GOOS=linux GOARCH="${PROVIDER_GOARCH}" go build -o "${ROOT_DIR}/provider" "${ROOT_DIR}/cmd/provider"
+CGO_ENABLED=0 GOOS=linux GOARCH="${PROVIDER_GOARCH}" go build -trimpath -o "${ROOT_DIR}/provider" "${ROOT_DIR}/cmd/provider"
 
 echo "==> Building provider image ${PROVIDER_IMAGE}"
 docker build -t "${PROVIDER_IMAGE}" "${ROOT_DIR}"
