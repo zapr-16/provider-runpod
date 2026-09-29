@@ -1,6 +1,7 @@
 package fieldcmp
 
 import (
+	"reflect"
 	"testing"
 
 	v1alpha1 "github.com/zapr-16/provider-runpod/apis/v1alpha1"
@@ -73,7 +74,7 @@ func TestBuildEnvMap(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			got := BuildEnvMap(tc.in)
-			if !StringMapsEqual(got, tc.want) {
+			if !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("BuildEnvMap(%v) = %v, want %v", tc.in, got, tc.want)
 			}
 		})
@@ -96,7 +97,7 @@ func TestCloneStrings(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			got := CloneStrings(tc.in)
-			if !StringSlicesEqual(got, tc.want) {
+			if !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("CloneStrings(%v) = %v, want %v", tc.in, got, tc.want)
 			}
 
@@ -104,6 +105,10 @@ func TestCloneStrings(t *testing.T) {
 				got[0] = "mutated"
 				if tc.in[0] == "mutated" {
 					t.Fatalf("CloneStrings did not copy the input slice")
+				}
+				tc.in[1] = "input-mutated"
+				if got[1] == "input-mutated" {
+					t.Fatalf("CloneStrings output aliases the input slice")
 				}
 			}
 		})

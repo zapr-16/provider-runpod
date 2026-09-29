@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -31,53 +32,26 @@ func TestPingValidCredentialsReturnsNil(t *testing.T) {
 	}
 }
 
-// TestPingUnauthorizedReturnsError covers a revoked/invalid key: the
-// current validateCredentials only checks the secret is non-empty, so a
-// revoked key would still be reported Available without this check.
-func TestPingUnauthorizedReturnsError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = w.Write([]byte(`{"error":"invalid api key"}`))
-	}))
-	defer srv.Close()
+// TestPingNon2xxReturnsError covers a revoked/invalid key (401/403) and a
+// transient failure (5xx): each must surface as an error naming the status,
+// so the ProviderConfig is never marked Available on a rejected or broken
+// connection.
+func TestPingNon2xxReturnsError(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusInternalServerError} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(status)
+			}))
+			defer srv.Close()
 
-	c := NewClient("revoked-key", WithBaseURL(srv.URL))
-	err := c.Ping(context.Background())
-	if err == nil {
-		t.Fatal("Ping() error = nil, want non-nil")
-	}
-	if !strings.Contains(err.Error(), "401") {
-		t.Fatalf("Ping() error = %q, want to mention status 401", err.Error())
-	}
-}
-
-// TestPingForbiddenReturnsError covers the other credential-rejection
-// status the RunPod API can return.
-func TestPingForbiddenReturnsError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusForbidden)
-	}))
-	defer srv.Close()
-
-	c := NewClient("forbidden-key", WithBaseURL(srv.URL))
-	if err := c.Ping(context.Background()); err == nil {
-		t.Fatal("Ping() error = nil, want non-nil")
-	}
-}
-
-// TestPingServerErrorReturnsError covers a transient failure (5xx): it must
-// still be surfaced as an error (so the ProviderConfig is not marked
-// Available on a broken connection), even though it is not necessarily an
-// invalid-credentials condition.
-func TestPingServerErrorReturnsError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer srv.Close()
-
-	c := NewClient("some-key", WithBaseURL(srv.URL))
-	if err := c.Ping(context.Background()); err == nil {
-		t.Fatal("Ping() error = nil, want non-nil")
+			err := NewClient("some-key", WithBaseURL(srv.URL)).Ping(context.Background())
+			if err == nil {
+				t.Fatal("Ping() error = nil, want non-nil")
+			}
+			if want := strconv.Itoa(status); !strings.Contains(err.Error(), want) {
+				t.Fatalf("Ping() error = %q, want to mention status %s", err.Error(), want)
+			}
+		})
 	}
 }
 
