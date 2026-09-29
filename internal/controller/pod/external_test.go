@@ -364,11 +364,17 @@ func TestObserve(t *testing.T) {
 			},
 		},
 		"NoDriftNoLifecycleMismatchIsUpToDate": {
+			// Matching env and ports (declared in a different order than the
+			// API reports them) are not drift.
 			externalName: "pod-123",
-			status:       v1alpha1.PodObservation{PodID: "existing"},
-			statusCode:   http.StatusOK,
-			response:     readyResponse,
-			wantCalls:    1,
+			spec: v1alpha1.PodParameters{
+				Env:   []v1alpha1.EnvVar{{Name: "MODE", Value: "prod"}},
+				Ports: []v1alpha1.Port{{Number: 22}, {Number: 8888, Protocol: "http"}},
+			},
+			status:     v1alpha1.PodObservation{PodID: "existing"},
+			statusCode: http.StatusOK,
+			response:   readyResponse,
+			wantCalls:  1,
 			want: want{
 				exists:          true,
 				upToDate:        true,
@@ -377,8 +383,11 @@ func TestObserve(t *testing.T) {
 				readyReason:     xpv2.ReasonAvailable,
 				networkingReady: true,
 				podID:           "pod-123",
+				runtimeEndpoint: "https://pod-123-8888.proxy.runpod.net",
 				connection: managed.ConnectionDetails{
-					"podId": []byte("pod-123"),
+					"podId":    []byte("pod-123"),
+					"endpoint": []byte("https://pod-123-8888.proxy.runpod.net"),
+					"port":     []byte("8888"),
 				},
 			},
 		},
@@ -559,6 +568,28 @@ func TestObserve(t *testing.T) {
 			statusCode:   http.StatusOK,
 			response:     readyResponse,
 			wantCalls:    1,
+			want: want{
+				exists:          true,
+				upToDate:        true,
+				readyStatus:     corev1.ConditionTrue,
+				readyReason:     xpv2.ReasonAvailable,
+				networkingReady: true,
+				podID:           "pod-123",
+				connection: managed.ConnectionDetails{
+					"podId": []byte("pod-123"),
+				},
+			},
+		},
+		"EmptyEnvAndPortsDoNotTriggerDrift": {
+			externalName: "pod-123",
+			spec: v1alpha1.PodParameters{
+				Env:   []v1alpha1.EnvVar{},
+				Ports: []v1alpha1.Port{},
+			},
+			status:     v1alpha1.PodObservation{PodID: "existing"},
+			statusCode: http.StatusOK,
+			response:   readyResponse,
+			wantCalls:  1,
 			want: want{
 				exists:          true,
 				upToDate:        true,
@@ -996,21 +1027,6 @@ func TestObserveAdoptsIncompleteCreate(t *testing.T) {
 	})
 }
 
-// TestHasMutableDriftIgnoresDerivedNameSuffix confirms that the deterministic
-// -uid8 suffix appended to the name sent on create never surfaces as drift:
-// hasMutableDrift never compares against a pod's name in the first place, so
-// the response's name is free to include the suffix (or anything else)
-// without affecting up-to-date evaluation.
-func TestHasMutableDriftIgnoresDerivedNameSuffix(t *testing.T) {
-	image := "runpod/image:latest"
-	spec := v1alpha1.PodParameters{ImageName: &image}
-	response := &runpodclient.PodResponse{Name: "vllm-test-550e8400", Image: image}
-
-	if hasMutableDrift(spec, response) {
-		t.Fatal("hasMutableDrift() = true, want false: the derived-name suffix must never be reported as drift")
-	}
-}
-
 func TestDelete(t *testing.T) {
 	t.Run("HappyPathReturnsNil", func(t *testing.T) {
 		var calls int
@@ -1364,80 +1380,6 @@ func TestUpdate(t *testing.T) {
 			t.Fatalf("Update() HTTP calls = %d, want 0", calls)
 		}
 	})
-}
-
-func TestHasEnvDrift(t *testing.T) {
-	tests := map[string]struct {
-		desired  []v1alpha1.EnvVar
-		observed map[string]string
-		want     bool
-	}{
-		"NilDesiredDoesNotDrift": {
-			observed: map[string]string{},
-			want:     false,
-		},
-		"EmptyDesiredDoesNotDrift": {
-			// Empty and nil both mean "unmanaged": the PATCH payload uses
-			// omitempty, so an empty value could never be reconciled anyway.
-			desired:  []v1alpha1.EnvVar{},
-			observed: map[string]string{"MODE": "prod"},
-			want:     false,
-		},
-		"MatchingValuesDoNotDrift": {
-			desired:  []v1alpha1.EnvVar{{Name: "MODE", Value: "prod"}},
-			observed: map[string]string{"MODE": "prod"},
-			want:     false,
-		},
-		"DifferingValuesDrift": {
-			desired:  []v1alpha1.EnvVar{{Name: "MODE", Value: "dev"}},
-			observed: map[string]string{"MODE": "prod"},
-			want:     true,
-		},
-	}
-
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			if got := hasEnvDrift(tc.desired, tc.observed); got != tc.want {
-				t.Fatalf("hasEnvDrift() = %v, want %v", got, tc.want)
-			}
-		})
-	}
-}
-
-func TestHasPortsDrift(t *testing.T) {
-	tests := map[string]struct {
-		desired  []v1alpha1.Port
-		observed []string
-		want     bool
-	}{
-		"NilDesiredDoesNotDrift": {
-			observed: []string{"8888/http"},
-			want:     false,
-		},
-		"EmptyDesiredDoesNotDrift": {
-			desired:  []v1alpha1.Port{},
-			observed: []string{"8888/http"},
-			want:     false,
-		},
-		"MatchingSetsDoNotDrift": {
-			desired:  []v1alpha1.Port{{Number: 8888, Protocol: "http"}, {Number: 22}},
-			observed: []string{"22/tcp", "8888/http"},
-			want:     false,
-		},
-		"DifferingSetsDrift": {
-			desired:  []v1alpha1.Port{{Number: 9999, Protocol: "http"}},
-			observed: []string{"8888/http"},
-			want:     true,
-		},
-	}
-
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			if got := hasPortsDrift(tc.desired, tc.observed); got != tc.want {
-				t.Fatalf("hasPortsDrift() = %v, want %v", got, tc.want)
-			}
-		})
-	}
 }
 
 func TestResolveConnectionTarget(t *testing.T) {

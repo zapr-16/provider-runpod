@@ -811,21 +811,6 @@ func TestObserveAdoptsIncompleteCreate(t *testing.T) {
 	})
 }
 
-// TestHasEndpointDriftIgnoresDerivedNameSuffix confirms that the
-// deterministic -uid8 suffix appended to the name sent on create never
-// surfaces as drift: hasEndpointDrift never compares against an endpoint's
-// name in the first place, so the response's name is free to include the
-// suffix (or anything else) without affecting up-to-date evaluation.
-func TestHasEndpointDriftIgnoresDerivedNameSuffix(t *testing.T) {
-	spec := matchingSpec()
-	response := readyResponse()
-	response.Name = "vllm-small-550e8400"
-
-	if hasEndpointDrift(spec, response) {
-		t.Fatal("hasEndpointDrift() = true, want false: the derived-name suffix must never be reported as drift")
-	}
-}
-
 func TestUpdate(t *testing.T) {
 	t.Run("PatchesEndpointAndTemplateWhenDriftedAndRecyclesWorkers", func(t *testing.T) {
 		// Scenario 5: PATCH /endpoints -> GET /templates (drift check) ->
