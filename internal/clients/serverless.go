@@ -1,12 +1,8 @@
 package clients
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"net/http"
-
-	"github.com/pkg/errors"
 )
 
 const (
@@ -139,7 +135,7 @@ type EndpointResponse struct {
 // CreateTemplate creates a RunPod template and returns its ID.
 func (c *Client) CreateTemplate(ctx context.Context, payload CreateTemplateRequest) (string, error) {
 	var out TemplateResponse
-	if err := c.doJSON(ctx, http.MethodPost, templatesPath, payload, &out); err != nil {
+	if _, err := c.do(ctx, http.MethodPost, templatesPath, payload, &out); err != nil {
 		return "", err
 	}
 	return out.ID, nil
@@ -150,7 +146,8 @@ func (c *Client) UpdateTemplate(ctx context.Context, templateID string, payload 
 	if err := validateResourceID(templateID); err != nil {
 		return err
 	}
-	return c.doJSON(ctx, http.MethodPatch, templatesPathPrefix+templateID, payload, nil)
+	_, err := c.do(ctx, http.MethodPatch, templatesPathPrefix+templateID, payload, nil)
+	return err
 }
 
 // DeleteTemplate deletes a RunPod template. Already-gone responses count as
@@ -165,7 +162,7 @@ func (c *Client) DeleteTemplate(ctx context.Context, templateID string) error {
 // CreateEndpoint creates a RunPod serverless endpoint and returns its ID.
 func (c *Client) CreateEndpoint(ctx context.Context, payload CreateEndpointRequest) (string, error) {
 	var out EndpointResponse
-	if err := c.doJSON(ctx, http.MethodPost, endpointsPath, payload, &out); err != nil {
+	if _, err := c.do(ctx, http.MethodPost, endpointsPath, payload, &out); err != nil {
 		return "", err
 	}
 	return out.ID, nil
@@ -222,7 +219,8 @@ func (c *Client) UpdateEndpoint(ctx context.Context, endpointID string, payload 
 	if err := validateResourceID(endpointID); err != nil {
 		return err
 	}
-	return c.doJSON(ctx, http.MethodPatch, endpointsPathPrefix+endpointID, payload, nil)
+	_, err := c.do(ctx, http.MethodPatch, endpointsPathPrefix+endpointID, payload, nil)
+	return err
 }
 
 // DeleteEndpoint deletes a RunPod serverless endpoint. Already-gone responses
@@ -233,96 +231,4 @@ func (c *Client) DeleteEndpoint(ctx context.Context, endpointID string) error {
 		return err
 	}
 	return c.deleteStrict(ctx, endpointsPathPrefix+endpointID)
-}
-
-// doJSON executes a JSON request against the RunPod API and decodes the
-// response into out when out is non-nil. Non-2xx statuses are errors.
-func (c *Client) doJSON(ctx context.Context, method, path string, payload any, out any) error {
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return errors.Wrap(err, errCreateRequest)
-	}
-
-	req, err := c.NewRequest(ctx, method, path, bytes.NewReader(body))
-	if err != nil {
-		return errors.Wrap(err, errCreateRequest)
-	}
-
-	resp, err := c.Do(req)
-	if err != nil {
-		return errors.Wrap(err, errDoRequest)
-	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
-
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return errors.Errorf("RunPod %s %s returned status %d: %s", method, path, resp.StatusCode, readErrorBody(resp.Body))
-	}
-
-	if out == nil {
-		return nil
-	}
-	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-		return errors.Wrap(err, errDecodeResponse)
-	}
-	return nil
-}
-
-// deleteStrict issues a DELETE, treating only already-gone statuses
-// (404/410) as success; everything else non-2xx is an error, matching the
-// pod delete semantics.
-func (c *Client) deleteStrict(ctx context.Context, path string) error {
-	req, err := c.NewRequest(ctx, http.MethodDelete, path, nil)
-	if err != nil {
-		return errors.Wrap(err, errCreateRequest)
-	}
-
-	resp, err := c.Do(req)
-	if err != nil {
-		return errors.Wrap(err, errDoRequest)
-	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
-
-	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
-		return nil
-	}
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return errors.Errorf("RunPod DELETE %s returned status %d: %s", path, resp.StatusCode, readErrorBody(resp.Body))
-	}
-
-	return nil
-}
-
-// getStrict GETs path and decodes the response into out. Only a 404 means
-// "not found"; any other non-2xx is an error, so a transient failure never
-// reads as absence (which would trigger a duplicate Create).
-func (c *Client) getStrict(ctx context.Context, path string, out any) (bool, error) {
-	req, err := c.NewRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return false, errors.Wrap(err, errCreateRequest)
-	}
-
-	resp, err := c.Do(req)
-	if err != nil {
-		return false, errors.Wrap(err, errDoRequest)
-	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
-
-	if resp.StatusCode == http.StatusNotFound {
-		return false, nil
-	}
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return false, errors.Errorf("RunPod GET %s returned status %d: %s", path, resp.StatusCode, readErrorBody(resp.Body))
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-		return false, errors.Wrap(err, errDecodeResponse)
-	}
-
-	return true, nil
 }

@@ -3,36 +3,12 @@
 package fieldcmp
 
 import (
+	"fmt"
+	"maps"
+	"strings"
+
 	v1alpha1 "github.com/zapr-16/provider-runpod/apis/v1alpha1"
 )
-
-// StringSlicesEqual reports whether a and b contain the same strings in the
-// same order.
-func StringSlicesEqual(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-// StringMapsEqual reports whether a and b have the same keys mapped to the
-// same values.
-func StringMapsEqual(a, b map[string]string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for k, av := range a {
-		if bv, ok := b[k]; !ok || bv != av {
-			return false
-		}
-	}
-	return true
-}
 
 // BuildEnvMap flattens a slice of EnvVar into a name-to-value map, or nil if
 // in is empty.
@@ -48,14 +24,53 @@ func BuildEnvMap(in []v1alpha1.EnvVar) map[string]string {
 	return out
 }
 
-// CloneStrings returns a copy of in, or nil if in is empty.
-func CloneStrings(in []string) []string {
+// BuildPortTokens converts spec ports to "<port>/<protocol>" tokens, or nil
+// if in is empty.
+func BuildPortTokens(in []v1alpha1.Port) []string {
 	if len(in) == 0 {
 		return nil
 	}
-	out := make([]string, len(in))
-	copy(out, in)
+
+	out := make([]string, 0, len(in))
+	for _, port := range in {
+		out = append(out, NormalizePortToken(port.Number, port.Protocol))
+	}
 	return out
+}
+
+// PortTokensEqual compares two port-token slices as sets, since the RunPod
+// API does not guarantee ordering. Both sides are normalized first.
+func PortTokensEqual(want, observed []string) bool {
+	return maps.Equal(tokenSet(want), tokenSet(observed))
+}
+
+func tokenSet(tokens []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(tokens))
+	for _, token := range tokens {
+		set[NormalizeObservedToken(token)] = struct{}{}
+	}
+	return set
+}
+
+// NormalizePortToken builds a "<port>/<protocol>" token from spec fields;
+// the protocol is always appended, defaulting to tcp when unset.
+func NormalizePortToken(number int32, protocol string) string {
+	return fmt.Sprintf("%d/%s", number, NormalizeProtocol(protocol))
+}
+
+// NormalizeObservedToken parses a RunPod "<port>/<protocol>" token; a
+// missing protocol segment defaults to tcp.
+func NormalizeObservedToken(token string) string {
+	port, protocol, _ := strings.Cut(strings.ToLower(token), "/")
+	return fmt.Sprintf("%s/%s", port, NormalizeProtocol(protocol))
+}
+
+// NormalizeProtocol lowercases the protocol, defaulting empty to tcp.
+func NormalizeProtocol(protocol string) string {
+	if protocol == "" {
+		return "tcp"
+	}
+	return strings.ToLower(protocol)
 }
 
 // derivedNameSuffixLen is the number of UID characters appended to a

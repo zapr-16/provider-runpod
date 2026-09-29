@@ -5,7 +5,9 @@ import (
 	"github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/providerconfig"
 	xpresource "github.com/crossplane/crossplane-runtime/v2/pkg/resource"
 	"github.com/go-logr/logr"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1beta1 "github.com/zapr-16/provider-runpod/apis/v1beta1"
 )
@@ -21,15 +23,16 @@ import (
 // which kind of config (ProviderConfig or ClusterProviderConfig) it refers
 // to.
 func SetupUsageTracking(mgr ctrl.Manager, log logr.Logger) error {
-	if err := setupNamespacedUsageTracking(mgr, log); err != nil {
+	if err := setupUsageTracking(mgr, log, v1beta1.ProviderConfigGroupVersionKind, v1beta1.ProviderConfigGroupKind, v1beta1.ProviderConfigKind, &v1beta1.ProviderConfig{}); err != nil {
 		return err
 	}
-	return setupClusterUsageTracking(mgr, log)
+	return setupUsageTracking(mgr, log, v1beta1.ClusterProviderConfigGroupVersionKind, v1beta1.ClusterProviderConfigGroupKind, v1beta1.ClusterProviderConfigKind, &v1beta1.ClusterProviderConfig{})
 }
 
-func setupNamespacedUsageTracking(mgr ctrl.Manager, log logr.Logger) error {
+// setupUsageTracking registers the usage reconciler for one config kind.
+func setupUsageTracking(mgr ctrl.Manager, log logr.Logger, configGVK schema.GroupVersionKind, configGK string, kind string, config client.Object) error {
 	of := xpresource.ProviderConfigKinds{
-		Config:    v1beta1.ProviderConfigGroupVersionKind,
+		Config:    configGVK,
 		Usage:     v1beta1.ProviderConfigUsageGroupVersionKind,
 		UsageList: v1beta1.ProviderConfigUsageListGroupVersionKind,
 	}
@@ -39,26 +42,8 @@ func setupNamespacedUsageTracking(mgr ctrl.Manager, log logr.Logger) error {
 	)
 
 	return ctrl.NewControllerManagedBy(mgr).
-		Named(providerconfig.ControllerName(v1beta1.ProviderConfigGroupKind)).
-		For(&v1beta1.ProviderConfig{}).
-		Watches(&v1beta1.ProviderConfigUsage{}, &xpresource.EnqueueRequestForProviderConfig{Kind: v1beta1.ProviderConfigKind}).
-		Complete(r)
-}
-
-func setupClusterUsageTracking(mgr ctrl.Manager, log logr.Logger) error {
-	of := xpresource.ProviderConfigKinds{
-		Config:    v1beta1.ClusterProviderConfigGroupVersionKind,
-		Usage:     v1beta1.ProviderConfigUsageGroupVersionKind,
-		UsageList: v1beta1.ProviderConfigUsageListGroupVersionKind,
-	}
-
-	r := providerconfig.NewReconciler(mgr, of,
-		providerconfig.WithLogger(logging.NewLogrLogger(log)),
-	)
-
-	return ctrl.NewControllerManagedBy(mgr).
-		Named(providerconfig.ControllerName(v1beta1.ClusterProviderConfigGroupKind)).
-		For(&v1beta1.ClusterProviderConfig{}).
-		Watches(&v1beta1.ProviderConfigUsage{}, &xpresource.EnqueueRequestForProviderConfig{Kind: v1beta1.ClusterProviderConfigKind}).
+		Named(providerconfig.ControllerName(configGK)).
+		For(config).
+		Watches(&v1beta1.ProviderConfigUsage{}, &xpresource.EnqueueRequestForProviderConfig{Kind: kind}).
 		Complete(r)
 }

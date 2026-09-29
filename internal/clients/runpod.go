@@ -3,19 +3,19 @@
 package clients
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	xpresource "github.com/crossplane/crossplane-runtime/v2/pkg/resource"
 	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
-	"github.com/pkg/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-
-	v1beta1 "github.com/zapr-16/provider-runpod/apis/v1beta1"
 )
 
 const (
@@ -164,26 +164,69 @@ func NewClient(apiKey string, opts ...Option) *Client {
 	return c
 }
 
-// NewRequest creates an authenticated RunPod API request.
-func (c *Client) NewRequest(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
-	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, body)
-	if err != nil {
-		return nil, err
+// do executes an authenticated JSON request against the RunPod API. payload,
+// when non-nil, is marshalled as the request body; out, when non-nil, is
+// filled from the response body of a 2xx reply. Every non-2xx reply is an
+// error, but the HTTP status is returned alongside it so callers can
+// tolerate specific statuses (404 for reads, 404/410 for deletes). The
+// status is 0 when no response was received.
+func (c *Client) do(ctx context.Context, method, path string, payload, out any) (int, error) {
+	var body io.Reader
+	if payload != nil {
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			return 0, errors.Wrap(err, errCreateRequest)
+		}
+		body = bytes.NewReader(encoded)
 	}
 
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, body)
+	if err != nil {
+		return 0, errors.Wrap(err, errCreateRequest)
+	}
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("Content-Type", "application/json")
-	return req, nil
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return 0, errors.Wrap(err, errDoRequest)
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return resp.StatusCode, errors.Errorf("RunPod %s %s returned status %d: %s", method, path, resp.StatusCode, readErrorBody(resp.Body))
+	}
+
+	if out != nil {
+		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+			return resp.StatusCode, errors.Wrap(err, errDecodeResponse)
+		}
+	}
+	return resp.StatusCode, nil
 }
 
-// Do executes an HTTP request with the configured client.
-//
-// endpoint fixed at client construction (defaultBaseURL or an operator-set
-// override), not attacker-controlled input forwarded from a caller.
-//
-//nolint:gosec // G704: the request target is c.baseURL, a RunPod API
-func (c *Client) Do(req *http.Request) (*http.Response, error) {
-	return c.httpClient.Do(req)
+// getStrict GETs path and decodes the response into out. Only a 404 means
+// "not found"; any other non-2xx is an error, so a transient failure never
+// reads as absence (which would trigger a duplicate Create).
+func (c *Client) getStrict(ctx context.Context, path string, out any) (bool, error) {
+	status, err := c.do(ctx, http.MethodGet, path, nil, out)
+	if status == http.StatusNotFound {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// deleteStrict issues a DELETE, treating only already-gone statuses
+// (404/410) as success; everything else non-2xx is an error, matching the
+// pod delete semantics.
+func (c *Client) deleteStrict(ctx context.Context, path string) error {
+	status, err := c.do(ctx, http.MethodDelete, path, nil, nil)
+	if status == http.StatusNotFound || status == http.StatusGone {
+		return nil
+	}
+	return err
 }
 
 // ClientFromCredentials builds an authenticated RunPod client from the
@@ -203,45 +246,14 @@ func ClientFromCredentials(ctx context.Context, kube client.Client, creds xpv2.C
 	return NewClient(string(apiKey), opts...), nil
 }
 
-// ClientFromProviderConfig builds an authenticated RunPod client from a
-// namespaced ProviderConfig. The credentials' secretRef, if set, has no
-// namespace field, so it is always resolved in the ProviderConfig's own
-// namespace (pc.Namespace) - a namespace-scoped tenant can never read a
-// secret living elsewhere in the cluster.
-func ClientFromProviderConfig(ctx context.Context, kube client.Client, pc *v1beta1.ProviderConfig) (*Client, error) {
-	return ClientFromCredentials(ctx, kube, pc.Spec.Credentials.ToCommonCredentialSelectors(pc.Namespace))
-}
-
-// ClientFromClusterProviderConfig builds an authenticated RunPod client from
-// a cluster-scoped ClusterProviderConfig.
-func ClientFromClusterProviderConfig(ctx context.Context, kube client.Client, pc *v1beta1.ClusterProviderConfig) (*Client, error) {
-	return ClientFromCredentials(ctx, kube, pc.Spec.Credentials)
-}
-
 // Ping performs a cheap authenticated call (GET /pods) to check that the
 // configured API key is actually accepted by the RunPod API. Any 2xx status
 // means the key works; 401/403 means the key is invalid or revoked; any
 // other status is treated as a transient failure (rate limiting, an outage,
 // ...) rather than a credentials problem.
 func (c *Client) Ping(ctx context.Context) error {
-	req, err := c.NewRequest(ctx, http.MethodGet, podsPath, nil)
-	if err != nil {
-		return errors.Wrap(err, errCreateRequest)
-	}
-
-	resp, err := c.Do(req)
-	if err != nil {
-		return errors.Wrap(err, errDoRequest)
-	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
-
-	if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
-		return nil
-	}
-
-	return errors.Errorf("RunPod GET %s returned status %d: %s", podsPath, resp.StatusCode, readErrorBody(resp.Body))
+	_, err := c.do(ctx, http.MethodGet, podsPath, nil, nil)
+	return err
 }
 
 // GetPod retrieves a pod observation payload from the RunPod API. Only a
@@ -278,7 +290,7 @@ func (c *Client) ListPods(ctx context.Context) ([]PodResponse, error) {
 // CreatePod creates a new RunPod pod and returns its pod ID.
 func (c *Client) CreatePod(ctx context.Context, payload CreatePodRequest) (string, error) {
 	var out PodResponse
-	if err := c.doJSON(ctx, http.MethodPost, podsPath, payload, &out); err != nil {
+	if _, err := c.do(ctx, http.MethodPost, podsPath, payload, &out); err != nil {
 		return "", err
 	}
 	return out.ID, nil
@@ -300,7 +312,8 @@ func (c *Client) UpdatePod(ctx context.Context, podID string, payload UpdatePodR
 	if err := validateResourceID(podID); err != nil {
 		return err
 	}
-	return c.doJSON(ctx, http.MethodPatch, podsPathPrefix+podID, payload, nil)
+	_, err := c.do(ctx, http.MethodPatch, podsPathPrefix+podID, payload, nil)
+	return err
 }
 
 // StartPod starts or resumes a stopped pod (POST /pods/{podId}/start).
@@ -319,31 +332,14 @@ func (c *Client) podAction(ctx context.Context, podID, action string) error {
 	if err := validateResourceID(podID); err != nil {
 		return err
 	}
-	req, err := c.NewRequest(ctx, http.MethodPost, podsPathPrefix+podID+"/"+action, nil)
-	if err != nil {
-		return errors.Wrap(err, errCreateRequest)
-	}
-	resp, err := c.Do(req)
-	if err != nil {
-		return errors.Wrap(err, errDoRequest)
-	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return errors.Errorf("RunPod POST %s returned status %d: %s", podsPathPrefix+podID+"/"+action, resp.StatusCode, readErrorBody(resp.Body))
-	}
-	return nil
+	_, err := c.do(ctx, http.MethodPost, podsPathPrefix+podID+"/"+action, nil, nil)
+	return err
 }
 
 // readErrorBody reads an error response body, capped at 16KiB: the body is
 // untrusted (comes from the remote API), so the read is bounded regardless
 // of how large a response the server sends.
 func readErrorBody(body io.Reader) string {
-	if body == nil {
-		return "<empty>"
-	}
-
 	payload, err := io.ReadAll(io.LimitReader(body, 16*1024))
 	if err != nil {
 		return "<unreadable>"

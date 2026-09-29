@@ -2,18 +2,19 @@ package template
 
 import (
 	"context"
-	"fmt"
-	"strings"
+	"maps"
+	"slices"
 
+	"github.com/crossplane/crossplane-runtime/v2/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/v2/pkg/meta"
 	managed "github.com/crossplane/crossplane-runtime/v2/pkg/reconciler/managed"
 	xpresource "github.com/crossplane/crossplane-runtime/v2/pkg/resource"
 	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
 	"github.com/go-logr/logr"
-	"github.com/pkg/errors"
 
 	v1alpha1 "github.com/zapr-16/provider-runpod/apis/v1alpha1"
 	runpodclient "github.com/zapr-16/provider-runpod/internal/clients"
+	"github.com/zapr-16/provider-runpod/internal/controller/fieldcmp"
 )
 
 const (
@@ -81,12 +82,12 @@ func (e *external) Create(ctx context.Context, mg xpresource.Managed) (managed.E
 		Name:                    name,
 		ImageName:               spec.ImageName,
 		IsServerless:            isServerless,
-		Env:                     buildEnvMap(spec.Env),
+		Env:                     fieldcmp.BuildEnvMap(spec.Env),
 		ContainerDiskInGb:       spec.ContainerDiskInGb,
-		DockerStartCmd:          cloneStrings(spec.DockerStartCmd),
-		DockerEntrypoint:        cloneStrings(spec.DockerEntrypoint),
+		DockerStartCmd:          spec.DockerStartCmd,
+		DockerEntrypoint:        spec.DockerEntrypoint,
 		ContainerRegistryAuthID: spec.ContainerRegistryAuthID,
-		Ports:                   buildPortTokens(spec.Ports),
+		Ports:                   fieldcmp.BuildPortTokens(spec.Ports),
 		VolumeInGb:              spec.VolumeInGb,
 		VolumeMountPath:         spec.VolumeMountPath,
 	})
@@ -113,12 +114,12 @@ func (e *external) Update(ctx context.Context, mg xpresource.Managed) (managed.E
 	payload := runpodclient.UpdateTemplateRequest{
 		Name:                    spec.Name,
 		ImageName:               &imageName,
-		Env:                     buildEnvMap(spec.Env),
+		Env:                     fieldcmp.BuildEnvMap(spec.Env),
 		ContainerDiskInGb:       spec.ContainerDiskInGb,
-		DockerStartCmd:          cloneStrings(spec.DockerStartCmd),
-		DockerEntrypoint:        cloneStrings(spec.DockerEntrypoint),
+		DockerStartCmd:          spec.DockerStartCmd,
+		DockerEntrypoint:        spec.DockerEntrypoint,
 		ContainerRegistryAuthID: spec.ContainerRegistryAuthID,
-		Ports:                   buildPortTokens(spec.Ports),
+		Ports:                   fieldcmp.BuildPortTokens(spec.Ports),
 		VolumeInGb:              spec.VolumeInGb,
 		VolumeMountPath:         spec.VolumeMountPath,
 	}
@@ -160,122 +161,17 @@ func hasStandaloneTemplateDrift(spec v1alpha1.TemplateParameters, r runpodclient
 	if spec.ContainerRegistryAuthID != nil && *spec.ContainerRegistryAuthID != r.ContainerRegistryAuthID {
 		return true
 	}
-	if len(spec.DockerStartCmd) > 0 && !stringSlicesEqual(spec.DockerStartCmd, r.DockerStartCmd) {
+	if len(spec.DockerStartCmd) > 0 && !slices.Equal(spec.DockerStartCmd, r.DockerStartCmd) {
 		return true
 	}
-	if len(spec.DockerEntrypoint) > 0 && !stringSlicesEqual(spec.DockerEntrypoint, r.DockerEntrypoint) {
+	if len(spec.DockerEntrypoint) > 0 && !slices.Equal(spec.DockerEntrypoint, r.DockerEntrypoint) {
 		return true
 	}
-	if len(spec.Env) > 0 && !stringMapsEqual(buildEnvMap(spec.Env), r.Env) {
+	if len(spec.Env) > 0 && !maps.Equal(fieldcmp.BuildEnvMap(spec.Env), r.Env) {
 		return true
 	}
-	if len(spec.Ports) > 0 && !portTokensEqual(buildPortTokens(spec.Ports), r.Ports) {
+	if len(spec.Ports) > 0 && !fieldcmp.PortTokensEqual(fieldcmp.BuildPortTokens(spec.Ports), r.Ports) {
 		return true
 	}
 	return false
-}
-
-func stringSlicesEqual(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func stringMapsEqual(a, b map[string]string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for k, av := range a {
-		if bv, ok := b[k]; !ok || bv != av {
-			return false
-		}
-	}
-	return true
-}
-
-func buildEnvMap(in []v1alpha1.EnvVar) map[string]string {
-	if len(in) == 0 {
-		return nil
-	}
-
-	out := make(map[string]string, len(in))
-	for _, env := range in {
-		out[env.Name] = env.Value
-	}
-	return out
-}
-
-func cloneStrings(in []string) []string {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]string, len(in))
-	copy(out, in)
-	return out
-}
-
-func buildPortTokens(in []v1alpha1.Port) []string {
-	if len(in) == 0 {
-		return nil
-	}
-
-	out := make([]string, 0, len(in))
-	for _, port := range in {
-		out = append(out, normalizePortToken(port.Number, port.Protocol))
-	}
-	return out
-}
-
-// portTokensEqual compares two port-token slices as sets, since the RunPod
-// API does not guarantee ordering.
-func portTokensEqual(want, observed []string) bool {
-	wantSet := map[string]struct{}{}
-	for _, token := range want {
-		wantSet[normalizeObservedToken(token)] = struct{}{}
-	}
-
-	gotSet := map[string]struct{}{}
-	for _, token := range observed {
-		gotSet[normalizeObservedToken(token)] = struct{}{}
-	}
-
-	if len(wantSet) != len(gotSet) {
-		return false
-	}
-	for k := range wantSet {
-		if _, ok := gotSet[k]; !ok {
-			return false
-		}
-	}
-	return true
-}
-
-// normalizePortToken builds a "<port>/<protocol>" token from spec fields;
-// the protocol is always appended, defaulting to tcp when unset.
-func normalizePortToken(number int32, protocol string) string {
-	return fmt.Sprintf("%d/%s", number, normalizeProtocol(protocol))
-}
-
-// normalizeObservedToken parses a RunPod "<port>/<protocol>" token; a
-// missing protocol segment defaults to tcp.
-func normalizeObservedToken(token string) string {
-	parts := strings.SplitN(strings.ToLower(token), "/", 2)
-	if len(parts) == 1 {
-		return fmt.Sprintf("%s/%s", parts[0], normalizeProtocol(""))
-	}
-	return fmt.Sprintf("%s/%s", parts[0], normalizeProtocol(parts[1]))
-}
-
-// normalizeProtocol lowercases the protocol, defaulting empty to tcp.
-func normalizeProtocol(protocol string) string {
-	if protocol == "" {
-		return "tcp"
-	}
-	return strings.ToLower(protocol)
 }

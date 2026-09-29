@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	xpv2 "github.com/crossplane/crossplane/apis/v2/core/v2"
-	"go.uber.org/zap"
+	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -88,10 +88,22 @@ func newSecret(apiKey string) *corev1.Secret {
 	}
 }
 
+func namespacedReconciler(kube client.Client, baseURL string) *reconciler[*v1beta1.ProviderConfig] {
+	r := newProviderConfigReconciler(kube, logr.Discard())
+	r.baseURL = baseURL
+	return r
+}
+
+func clusterReconciler(kube client.Client, baseURL string) *reconciler[*v1beta1.ClusterProviderConfig] {
+	r := newClusterProviderConfigReconciler(kube, logr.Discard())
+	r.baseURL = baseURL
+	return r
+}
+
 func TestReconcileProviderConfigNotFound(t *testing.T) {
 	s := testScheme(t)
 	kube := fake.NewClientBuilder().WithScheme(s).Build()
-	r := &Reconciler{kube: kube, zapLogger: zap.NewNop()}
+	r := namespacedReconciler(kube, "")
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "missing"}})
 	if err != nil {
@@ -109,7 +121,7 @@ func TestReconcileValidCredentialsSetsReadyAndRequeues(t *testing.T) {
 	srv := newPingServer(t, http.StatusOK)
 
 	kube := fake.NewClientBuilder().WithScheme(s).WithObjects(pc, secret).WithStatusSubresource(pc).Build()
-	r := &Reconciler{kube: kube, zapLogger: zap.NewNop(), baseURL: srv.URL}
+	r := namespacedReconciler(kube, srv.URL)
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "default", Namespace: "crossplane-system"}})
 	if err != nil {
@@ -134,7 +146,7 @@ func TestReconcileMissingSecretSetsUnavailableAndReturnsError(t *testing.T) {
 	pc := newProviderConfig("default")
 
 	kube := fake.NewClientBuilder().WithScheme(s).WithObjects(pc).WithStatusSubresource(pc).Build()
-	r := &Reconciler{kube: kube, zapLogger: zap.NewNop()}
+	r := namespacedReconciler(kube, "")
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "default", Namespace: "crossplane-system"}})
 	if err == nil {
@@ -163,7 +175,7 @@ func TestReconcileEmptySecretValueSetsUnavailableAndReturnsError(t *testing.T) {
 	secret := newSecret("   ")
 
 	kube := fake.NewClientBuilder().WithScheme(s).WithObjects(pc, secret).WithStatusSubresource(pc).Build()
-	r := &Reconciler{kube: kube, zapLogger: zap.NewNop()}
+	r := namespacedReconciler(kube, "")
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "default", Namespace: "crossplane-system"}})
 	if err == nil {
@@ -196,7 +208,7 @@ func TestReconcileRevokedCredentialsSetsUnavailableAndReturnsError(t *testing.T)
 	srv := newPingServer(t, http.StatusUnauthorized)
 
 	kube := fake.NewClientBuilder().WithScheme(s).WithObjects(pc, secret).WithStatusSubresource(pc).Build()
-	r := &Reconciler{kube: kube, zapLogger: zap.NewNop(), baseURL: srv.URL}
+	r := namespacedReconciler(kube, srv.URL)
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "default", Namespace: "crossplane-system"}})
 	if err == nil {
@@ -238,7 +250,7 @@ func TestReconcileStatusUpdateFailureOnValidCredentials(t *testing.T) {
 			},
 		}).
 		Build()
-	r := &Reconciler{kube: kube, zapLogger: zap.NewNop(), baseURL: srv.URL}
+	r := namespacedReconciler(kube, srv.URL)
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "default", Namespace: "crossplane-system"}})
 	if err == nil {
@@ -269,7 +281,7 @@ func TestReconcileStatusUpdateFailureOnMissingCredentials(t *testing.T) {
 			},
 		}).
 		Build()
-	r := &Reconciler{kube: kube, zapLogger: zap.NewNop()}
+	r := namespacedReconciler(kube, "")
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "default", Namespace: "crossplane-system"}})
 	if err == nil {
@@ -315,7 +327,7 @@ func TestReconcileSkipsStatusUpdateWhenReadyConditionUnchanged(t *testing.T) {
 			},
 		}).
 		Build()
-	r := &Reconciler{kube: kube, zapLogger: zap.NewNop(), baseURL: srv.URL}
+	r := namespacedReconciler(kube, srv.URL)
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "default", Namespace: "crossplane-system"}}
 
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
@@ -340,7 +352,7 @@ func TestClusterReconcileValidCredentialsSetsReadyAndRequeues(t *testing.T) {
 	srv := newPingServer(t, http.StatusOK)
 
 	kube := fake.NewClientBuilder().WithScheme(s).WithObjects(pc, secret).WithStatusSubresource(pc).Build()
-	r := &ClusterReconciler{kube: kube, zapLogger: zap.NewNop(), baseURL: srv.URL}
+	r := clusterReconciler(kube, srv.URL)
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "default"}})
 	if err != nil {
@@ -374,7 +386,7 @@ func TestReconcileGetErrorOtherThanNotFoundIsWrapped(t *testing.T) {
 			},
 		}).
 		Build()
-	r := &Reconciler{kube: kube, zapLogger: zap.NewNop()}
+	r := namespacedReconciler(kube, "")
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "default", Namespace: "crossplane-system"}})
 	if err == nil {

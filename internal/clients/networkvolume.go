@@ -36,7 +36,7 @@ type NetworkVolumeResponse struct {
 // CreateNetworkVolume creates a RunPod network volume and returns its ID.
 func (c *Client) CreateNetworkVolume(ctx context.Context, payload CreateNetworkVolumeRequest) (string, error) {
 	var out NetworkVolumeResponse
-	if err := c.doJSON(ctx, http.MethodPost, networkVolumesPath, payload, &out); err != nil {
+	if _, err := c.do(ctx, http.MethodPost, networkVolumesPath, payload, &out); err != nil {
 		return "", err
 	}
 	return out.ID, nil
@@ -60,7 +60,8 @@ func (c *Client) UpdateNetworkVolume(ctx context.Context, id string, payload Upd
 	if err := validateResourceID(id); err != nil {
 		return err
 	}
-	return c.doJSON(ctx, http.MethodPatch, networkVolumesPathPrefix+id, payload, nil)
+	_, err := c.do(ctx, http.MethodPatch, networkVolumesPathPrefix+id, payload, nil)
+	return err
 }
 
 // DeleteNetworkVolume deletes a network volume; 404/410 count as success.
